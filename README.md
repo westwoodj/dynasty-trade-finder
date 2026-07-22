@@ -169,3 +169,14 @@ premium and a 0.9×/year future discount.
 | Arbitrage threshold | 20% | Minimum spread to flag an opportunity |
 | Max assets per side | 2 | Controls 1-for-1 and 2-for-2 best-trade search |
 | Value history | `data/value_history.db` | One snapshot per day, written on first app load |
+| Local cache | `data/dtf.db` | SQLModel cache of all Sleeper + Parse responses to cut API calls |
+
+## Local cache & refresh
+
+To keep API usage low, every Sleeper and Parse response is cached in a local
+SQLite database (`data/dtf.db`, via SQLModel). Data is reused indefinitely —
+a cold start after the first load makes **zero** API calls — and is only
+re-fetched when you click **🔄 Values** or **🔄 League** in the sidebar, which
+also shows how long ago each was cached. Your value-model weights and
+trade-finder options are persisted per Sleeper username and restored on your
+next visit.
