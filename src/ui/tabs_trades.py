@@ -128,19 +128,34 @@ def render_best_trades(
     st.header("⚡ Best Trades")
     st.markdown(
         "Automatically generated proposals that improve your team, ranked by "
-        "value gain adjusted for positional need and timeline fit."
+        "value gain, mutual benefit, positional need, and timeline fit."
     )
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2 = st.columns([1, 2])
     include_picks = c1.checkbox("Include draft picks", value=True)
-    mutual_only = c2.checkbox(
+    balance = c2.slider(
+        "Trade balance",
+        min_value=0,
+        max_value=100,
+        value=50,
+        step=5,
+        format="%d%%",
+        help="0% ranks by your value gain alone (may surface lopsided trades "
+        "the other manager would never accept). 100% ranks by mutual "
+        "benefit — trades that fill both teams' positional needs. 50% "
+        "balances the two.",
+    )
+    fairness_weight = balance / 100.0
+
+    c3, c4 = st.columns(2)
+    mutual_only = c3.checkbox(
         "Only trades they might accept",
         value=True,
         help="Evaluates every proposal from the counterparty's perspective "
         "(their positional needs included) and drops anything they'd grade "
         "below C+.",
     )
-    timeline_fit = c3.checkbox(
+    timeline_fit = c4.checkbox(
         "Boost timeline-fit trades",
         value=True,
         help="Prefers contender↔rebuilder trades: win-now assets flow to "
@@ -176,6 +191,7 @@ def render_best_trades(
             counterparty_needs=counterparty_needs,
             min_their_grade="C+" if mutual_only else None,
             max_per_team=3,
+            fairness_weight=fairness_weight,
             bonus_scorer=bonus_scorer,
         )
 

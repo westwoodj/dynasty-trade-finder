@@ -142,6 +142,13 @@ counterparty's perspective (their positional needs included) and drops
 anything they'd grade below **C+** — killing the "trades nobody accepts"
 problem of brute-force finders.
 
+**Trade balance dial:** a slider ranks proposals anywhere from *maximize my
+value* (0% — may surface lopsided A+/C+ trades) to *maximize mutual benefit*
+(100% — need-complementary B+/B+ trades both managers would accept), with a
+true midpoint at 50%. Because raw value-gain and mutual-benefit live on very
+different scales, the two objectives are blended by **percentile rank** within
+the candidate pool rather than by raw score, so the dial behaves linearly.
+
 ### Draft picks
 
 Every future pick (3 seasons out) is assigned to its current owner via

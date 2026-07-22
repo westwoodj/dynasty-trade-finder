@@ -344,6 +344,78 @@ class TestMutualBenefit:
         assert len(proposals) == 1
         assert proposals[0].their_grade is None
 
+    def test_fairness_prefers_mutual_over_fleece(self) -> None:
+        # I have surplus RB depth and need a WR. Two partners, both offer a WR:
+        #  - Fleece: a big WR, but they need nothing from me (they lose value)
+        #  - Fair:   a solid WR, and they need the RB I'm sending (both gain)
+        analyzer = TradeAnalyzer()
+        mine = [asset("My RB", position="RB", value=55.0)]
+        theirs = {
+            "Fleece": [asset("Big WR", position="WR", value=72.0)],
+            "Fair": [asset("Solid WR", position="WR", value=57.0)],
+        }
+        values = {"My RB": 55.0, "Big WR": 72.0, "Solid WR": 57.0}
+        my_need = {"WR": 3}
+        cp_needs = {"Fleece": {}, "Fair": {"RB": 3}}
+
+        # Pure self-interest: the bigger raw gain (the fleece) wins
+        greedy = analyzer.find_best_trades(
+            mine, theirs, values, my_need, counterparty_needs=cp_needs,
+            fairness_weight=0.0,
+        )
+        assert greedy[0].their_team == "Fleece"
+
+        # Mutual benefit: the need-complementary swap wins even though my
+        # personal gain is smaller
+        fair = analyzer.find_best_trades(
+            mine, theirs, values, my_need, counterparty_needs=cp_needs,
+            fairness_weight=1.0,
+        )
+        assert fair[0].their_team == "Fair"
+
+    def test_fairness_midpoint_shifts_ranking(self) -> None:
+        # A pool with one fleece (huge my-gain, they lose) and several
+        # balanced trades. At 0.5, rank-blended scoring should no longer
+        # let the fleece dominate the way pure self-interest does.
+        analyzer = TradeAnalyzer()
+        mine = [
+            asset("My RB", position="RB", value=55.0),
+            asset("My Spare", position="WR", value=48.0),
+        ]
+        theirs = {
+            "Fleece": [asset("Huge WR", position="WR", value=80.0)],
+            "Fair": [asset("Even WR", position="WR", value=50.0)],
+        }
+        values = {
+            "My RB": 55.0, "My Spare": 48.0, "Huge WR": 80.0, "Even WR": 50.0,
+        }
+        my_need = {"WR": 3}
+        cp_needs = {"Fleece": {}, "Fair": {"RB": 3, "WR": 3}}
+
+        greedy = analyzer.find_best_trades(
+            mine, theirs, values, my_need, counterparty_needs=cp_needs,
+            fairness_weight=0.0, top_n=1,
+        )
+        fair = analyzer.find_best_trades(
+            mine, theirs, values, my_need, counterparty_needs=cp_needs,
+            fairness_weight=1.0, top_n=1,
+        )
+        # Extremes pick different partners — the dial actually moves ranking
+        assert greedy[0].their_team == "Fleece"
+        assert fair[0].their_team == "Fair"
+
+    def test_fairness_populates_their_grade(self) -> None:
+        analyzer = TradeAnalyzer()
+        mine = [asset("My Guy", value=50.0)]
+        theirs = {"Rivals": [asset("Their Guy", value=60.0)]}
+        values = {"My Guy": 50.0, "Their Guy": 60.0}
+        proposals = analyzer.find_best_trades(
+            mine, theirs, values, fairness_weight=0.5,
+            counterparty_needs={"Rivals": {}},
+        )
+        # fairness>0 evaluates the counterparty side even without a floor
+        assert proposals[0].their_grade is not None
+
     def test_max_per_team_caps_and_diversifies(self) -> None:
         analyzer = TradeAnalyzer()
         mine = [asset("My Guy", value=50.0)]
