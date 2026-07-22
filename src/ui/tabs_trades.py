@@ -124,6 +124,7 @@ def render_best_trades(
     counterparty_needs: dict[str, dict[str, float]],
     profiles_by_team: dict[str, TeamProfile],
     my_classification: str,
+    prefs=None,
 ) -> None:
     st.header("⚡ Best Trades")
     st.markdown(
@@ -132,14 +133,19 @@ def render_best_trades(
     )
 
     c1, c2 = st.columns([1, 2])
-    include_picks = c1.checkbox("Include draft picks", value=True)
+    include_picks = c1.checkbox(
+        "Include draft picks",
+        value=bool(getattr(prefs, "include_picks", True)),
+        key="pref_include_picks",
+    )
     balance = c2.slider(
         "Trade balance",
         min_value=0,
         max_value=100,
-        value=50,
+        value=int(getattr(prefs, "fairness_weight", 0.5) * 100),
         step=5,
         format="%d%%",
+        key="pref_fairness",
         help="0% ranks by your value gain alone (may surface lopsided trades "
         "the other manager would never accept). 100% ranks by mutual "
         "benefit — trades that fill both teams' positional needs. 50% "
@@ -150,14 +156,16 @@ def render_best_trades(
     c3, c4 = st.columns(2)
     mutual_only = c3.checkbox(
         "Only trades they might accept",
-        value=True,
+        value=bool(getattr(prefs, "mutual_only", True)),
+        key="pref_mutual_only",
         help="Evaluates every proposal from the counterparty's perspective "
         "(their positional needs included) and drops anything they'd grade "
         "below C+.",
     )
     timeline_fit = c4.checkbox(
         "Boost timeline-fit trades",
-        value=True,
+        value=bool(getattr(prefs, "timeline_fit", True)),
+        key="pref_timeline_fit",
         help="Prefers contender↔rebuilder trades: win-now assets flow to "
         "contenders, youth and picks to rebuilders.",
     )

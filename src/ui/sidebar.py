@@ -3,7 +3,6 @@ and data diagnostics."""
 
 from __future__ import annotations
 
-from dataclasses import replace
 from typing import Callable, Optional
 
 import streamlit as st
@@ -83,28 +82,54 @@ def render_connection_sidebar(
     }
 
 
-def render_format_panel(fmt: LeagueFormat) -> LeagueFormat:
-    """Show the detected league format with manual overrides."""
+def render_format_panel(fmt: LeagueFormat, prefs=None) -> LeagueFormat:
+    """Show the detected league format with manual overrides.
+
+    *prefs* (a UserPreferences) seeds the override widgets so a saved
+    override is restored across sessions.
+    """
     st.sidebar.markdown("---")
     st.sidebar.markdown(f"**Format:** {fmt.describe()}")
 
+    ppr_opts = [1.0, 0.5, 0.0]
     with st.sidebar.expander("⚙️ Override format"):
-        override = st.checkbox("Override detected format", key="fmt_override")
+        default_override = bool(getattr(prefs, "override_enabled", False))
+        override = st.checkbox(
+            "Override detected format", value=default_override, key="fmt_override"
+        )
         if not override:
             return fmt
+        d_qbs = getattr(prefs, "num_qbs", None) or fmt.num_qbs
         num_qbs = st.selectbox(
-            "Startable QBs", [1, 2], index=fmt.num_qbs - 1 if fmt.num_qbs <= 2 else 1
+            "Startable QBs", [1, 2], index=0 if d_qbs <= 1 else 1, key="pref_num_qbs"
         )
+        d_ppr = getattr(prefs, "ppr", None)
+        d_ppr = d_ppr if d_ppr in ppr_opts else fmt.ppr
         ppr = st.selectbox(
-            "PPR", [1.0, 0.5, 0.0], index=[1.0, 0.5, 0.0].index(fmt.ppr)
+            "PPR",
+            ppr_opts,
+            index=ppr_opts.index(d_ppr) if d_ppr in ppr_opts else 0,
+            key="pref_ppr",
         )
-        te_premium = st.checkbox("TE premium", value=fmt.te_premium)
-        return replace(fmt, num_qbs=num_qbs, ppr=ppr, te_premium=te_premium)
+        d_tep = getattr(prefs, "te_premium", None)
+        te_premium = st.checkbox(
+            "TE premium",
+            value=bool(fmt.te_premium if d_tep is None else d_tep),
+            key="pref_te_premium",
+        )
+        return fmt.model_copy(
+            update={"num_qbs": num_qbs, "ppr": ppr, "te_premium": te_premium}
+        )
 
 
-def render_value_model() -> ValueWeights:
-    """Value-model weight sliders; returns the configured weights."""
-    defaults = dict(DEFAULT_SOURCE_WEIGHTS)
+def render_value_model(saved: Optional[ValueWeights] = None) -> ValueWeights:
+    """Value-model weight sliders; returns the configured weights.
+
+    *saved* seeds the sliders from the user's persisted preferences.
+    """
+    saved = saved or ValueWeights()
+    saved_sources = saved.source_weights_dict()
+    base = dict(DEFAULT_SOURCE_WEIGHTS)
     with st.sidebar.expander("⚖️ Value model", expanded=False):
         st.caption("Source blend — how much each market is trusted")
         source_weights = tuple(
@@ -114,24 +139,30 @@ def render_value_model() -> ValueWeights:
                     SOURCE_LABELS.get(source, source),
                     0.0,
                     1.0,
-                    defaults[source],
+                    float(saved_sources.get(source, base[source])),
                     0.05,
                     key=f"w_{source}",
                 ),
             )
-            for source in defaults
+            for source in base
         )
 
         st.caption("Adjustments — 0 disables, 1 applies fully")
-        age = st.slider("Age curve", 0.0, 1.0, 0.5, 0.05, key="w_age")
-        trend = st.slider("Trend momentum (30d)", 0.0, 1.0, 0.0, 0.05, key="w_trend")
-        injury = st.slider("Injury risk", 0.0, 1.0, 0.0, 0.05, key="w_injury")
-        adp = st.slider("ADP divergence", 0.0, 1.0, 0.0, 0.05, key="w_adp")
+        age = st.slider("Age curve", 0.0, 1.0, saved.age_weight, 0.05, key="w_age")
+        trend = st.slider(
+            "Trend momentum (30d)", 0.0, 1.0, saved.trend_weight, 0.05, key="w_trend"
+        )
+        injury = st.slider(
+            "Injury risk", 0.0, 1.0, saved.injury_weight, 0.05, key="w_injury"
+        )
+        adp = st.slider(
+            "ADP divergence", 0.0, 1.0, saved.adp_divergence_weight, 0.05, key="w_adp"
+        )
 
         if st.button("Reset to defaults", key="w_reset"):
             for key in ("w_age", "w_trend", "w_injury", "w_adp"):
                 st.session_state.pop(key, None)
-            for source in defaults:
+            for source in base:
                 st.session_state.pop(f"w_{source}", None)
             st.rerun()
 

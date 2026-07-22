@@ -17,10 +17,10 @@ read goes through :func:`_as_float` / :func:`_as_int`.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from typing import Optional
 
 from parse_sdk import PaginationLimitError
+from pydantic import BaseModel
 
 from .league_settings import LeagueFormat, draftsharks_params, fantasycalc_params
 from .name_matching import normalize_name
@@ -42,8 +42,7 @@ class ProviderUnavailableError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class NormalizedPlayerValue:
+class NormalizedPlayerValue(BaseModel):
     """One player's value from a single source, scaled 0–100 in-source."""
 
     name: str

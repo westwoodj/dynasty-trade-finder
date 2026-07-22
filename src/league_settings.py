@@ -13,18 +13,19 @@ starter slots per position.  The result feeds:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from pydantic import BaseModel, ConfigDict
 
 
 SKILL_POSITIONS = ("QB", "RB", "WR", "TE")
 
 
-@dataclass(frozen=True)
-class LeagueFormat:
+class LeagueFormat(BaseModel):
     """Normalized description of a fantasy league's format.
 
     Frozen (hashable) so it can be passed to ``st.cache_data`` functions.
     """
+
+    model_config = ConfigDict(frozen=True)
 
     num_teams: int = 12
     num_qbs: int = 2  # startable QBs (QB + SUPER_FLEX slots); 2+ = superflex

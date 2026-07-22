@@ -13,6 +13,7 @@ from ..trade_analyzer import TradeAnalyzer
 def render_arbitrage(
     sources: dict[str, list[NormalizedPlayerValue]],
     analyzer: TradeAnalyzer,
+    prefs=None,
 ) -> None:
     st.header("📊 Arbitrage Opportunities")
     st.markdown(
@@ -37,7 +38,7 @@ def render_arbitrage(
         "Minimum spread threshold (%)",
         min_value=10,
         max_value=50,
-        value=20,
+        value=int(getattr(prefs, "arb_threshold", 0.20) * 100),
         step=5,
         key="arb_threshold",
     ) / 100.0

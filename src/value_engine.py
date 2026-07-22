@@ -18,8 +18,9 @@ value, so the calculator's tested interface is untouched.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Optional
+
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 from .data_providers import NormalizedPlayerValue
 from .name_matching import match_name, normalize_name
@@ -32,13 +33,14 @@ DEFAULT_SOURCE_WEIGHTS: tuple[tuple[str, float], ...] = (
 )
 
 
-@dataclass(frozen=True)
-class ValueWeights:
+class ValueWeights(BaseModel):
     """User-configurable weighting of the value model.
 
     Frozen (hashable) so it can key ``st.cache_data``.  Adjustment weights
     are 0–1 dials: 0 disables the adjustment, 1 applies it fully.
     """
+
+    model_config = ConfigDict(frozen=True)
 
     source_weights: tuple[tuple[str, float], ...] = DEFAULT_SOURCE_WEIGHTS
     age_weight: float = 0.5
@@ -57,8 +59,7 @@ class ValueWeights:
         )
 
 
-@dataclass
-class PlayerValuation:
+class PlayerValuation(BaseModel):
     """A player's blended, adjusted value with a full explanation trail."""
 
     key: str  # sleeper_id when known, else "name:<normalized>[:<pos>]"
@@ -69,8 +70,8 @@ class PlayerValuation:
     sleeper_id: Optional[str] = None
     base_value: float = 0.0  # weighted source blend, 0–100
     adjusted_value: float = 0.0  # after age/trend/injury/adp adjustments
-    values_by_source: dict[str, float] = field(default_factory=dict)
-    components: dict[str, float] = field(default_factory=dict)  # fraction per adjustment
+    values_by_source: dict[str, float] = Field(default_factory=dict)
+    components: dict[str, float] = Field(default_factory=dict)  # fraction per adjustment
     fc_player_id: Optional[str] = None  # for FantasyCalc trade-history drill-down
     ktc_slug: Optional[str] = None
     trend_30_day: Optional[float] = None  # display value from primary source
@@ -78,9 +79,9 @@ class PlayerValuation:
     injury_risk: Optional[str] = None
     adp: Optional[float] = None
     # Internal signals accumulated during blending
-    _trend_fracs: list[float] = field(default_factory=list, repr=False)
-    _adp_rank: Optional[float] = field(default=None, repr=False)
-    _value_rank: Optional[int] = field(default=None, repr=False)
+    _trend_fracs: list[float] = PrivateAttr(default_factory=list)
+    _adp_rank: Optional[float] = PrivateAttr(default=None)
+    _value_rank: Optional[int] = PrivateAttr(default=None)
 
 
 # ---------------------------------------------------------------------------

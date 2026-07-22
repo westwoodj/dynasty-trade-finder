@@ -23,7 +23,7 @@ On a fresh checkout the generated clients must be synced first::
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 import requests
@@ -35,6 +35,9 @@ from src.data_providers import (
     NormalizedPlayerValue,
     fetch_all_sources,
 )
+from src.db import DtfStore, get_engine
+from src.db.models import UserPreferences
+from src.db.store import apply_weights_to_prefs, weights_from_prefs
 from src.insights import (
     classify_teams,
     find_buy_low_sell_high,
@@ -74,8 +77,7 @@ from src.ui.tabs_roster import render_my_roster
 from src.ui.tabs_targets import render_trade_targets
 from src.ui.tabs_trades import render_best_trades, render_trade_explorer
 from src.ui.tabs_trends import render_trends
-from src.value_engine import ValueEngine
-from src.value_store import ValueStore
+from src.value_engine import ValueEngine, ValueWeights
 
 # ---------------------------------------------------------------------------
 # Page configuration
@@ -92,37 +94,48 @@ CURRENT_SEASON = str(datetime.now().year)
 
 
 # ---------------------------------------------------------------------------
-# Cached fetchers
+# Persistence — one DtfStore over data/dtf.db (cache-until-manual-refresh)
 # ---------------------------------------------------------------------------
 
 
-@st.cache_data(ttl=300, show_spinner="Fetching Sleeper data…")
-def fetch_user(username: str) -> Optional[dict]:
+@st.cache_resource
+def get_store() -> DtfStore:
+    return DtfStore(get_engine())
+
+
+def _should_force(kind: str) -> bool:
+    """True when the user requested a refresh of *kind* this run."""
+    forced = st.session_state.get("force_refresh", set())
+    return "all" in forced or kind in forced
+
+
+# --- Raw API fetchers (only called on a cache miss or forced refresh) ---
+
+
+def _api_user(username: str) -> Optional[dict]:
     try:
         return SleeperClient().get_user(username)
     except requests.HTTPError:
         return None
 
 
-@st.cache_data(ttl=300, show_spinner="Loading leagues…")
-def fetch_leagues(user_id: str, season: str) -> list[dict]:
+def _api_leagues(user_id: str, season: str) -> list[dict]:
     try:
         return SleeperClient().get_user_leagues(user_id, season) or []
     except requests.HTTPError:
         return []
 
 
-@st.cache_data(ttl=120, show_spinner="Loading league data…")
-def fetch_league_data(league_id: str) -> dict:
+def _api_league_data(league_id: str) -> dict:
     client = SleeperClient()
-    league = client.get_league(league_id)
-    rosters = client.get_league_rosters(league_id)
-    users = client.get_league_users(league_id)
-    return {"league": league, "rosters": rosters, "users": users}
+    return {
+        "league": client.get_league(league_id),
+        "rosters": client.get_league_rosters(league_id),
+        "users": client.get_league_users(league_id),
+    }
 
 
-@st.cache_data(ttl=600, show_spinner=False)
-def fetch_draft_data(league_id: str) -> dict:
+def _api_draft_data(league_id: str) -> dict:
     client = SleeperClient()
     try:
         drafts = client.get_league_drafts(league_id) or []
@@ -135,32 +148,174 @@ def fetch_draft_data(league_id: str) -> dict:
     return {"drafts": drafts, "traded_picks": traded_picks}
 
 
-@st.cache_data(ttl=3600, show_spinner="Downloading NFL player list (~5 MB)…")
-def fetch_nfl_players() -> dict:
+def _api_nfl_players() -> dict:
     try:
         return SleeperClient().get_nfl_players()
     except Exception:
         return {}
 
 
-@st.cache_data(ttl=1800, show_spinner="Fetching player values…")
+# --- DB-backed fetchers (return cached data unless forced) ---
+
+
+def fetch_user(username: str) -> Optional[dict]:
+    return get_store().get_or_fetch_user(
+        username, lambda: _api_user(username), force=_should_force("league")
+    )
+
+
+def fetch_leagues(user_id: str, season: str) -> list[dict]:
+    return get_store().get_or_fetch_leagues(
+        user_id,
+        season,
+        lambda: _api_leagues(user_id, season),
+        force=_should_force("league"),
+    )
+
+
+def fetch_league_data(league_id: str) -> dict:
+    return get_store().get_or_fetch_league_data(
+        league_id, lambda: _api_league_data(league_id), force=_should_force("league")
+    )
+
+
+def fetch_draft_data(league_id: str) -> dict:
+    return get_store().get_or_fetch_draft_data(
+        league_id, lambda: _api_draft_data(league_id), force=_should_force("league")
+    )
+
+
+@st.cache_data(show_spinner="Loading NFL player list…")
+def _load_nfl_players(refresh_token: int, force: bool) -> dict:
+    # cache_data memo (the ~5 MB dump) keyed by refresh_token; the DB gates
+    # the actual API call.
+    return get_store().get_or_fetch_nfl_players(_api_nfl_players, force=force)
+
+
+def fetch_nfl_players() -> dict:
+    return _load_nfl_players(
+        st.session_state.get("refresh_token", 0), _should_force("league")
+    )
+
+
 def fetch_source_values(
-    fmt_key: str, api_key: str, _fmt: LeagueFormat
+    fmt: LeagueFormat, api_key: str
 ) -> tuple[dict[str, list[NormalizedPlayerValue]], dict[str, str]]:
-    """Fetch every value source once per league format per 30 minutes.
+    return get_store().get_or_fetch_source_values(
+        fmt.cache_key(),
+        lambda: fetch_all_sources(fmt, api_key=api_key or None),
+        force=_should_force("values"),
+    )
 
-    ``fmt_key``/``api_key`` are the cache keys; ``_fmt`` (underscored, so
-    unhashed) carries the actual format object.
-    """
-    return fetch_all_sources(_fmt, api_key=api_key or None)
 
-
-@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_player_history(
-    fc_player_id: str, fmt_key: str, api_key: str, _fmt: LeagueFormat
+    fc_player_id: str, fmt: LeagueFormat, api_key: str
 ) -> list[tuple[str, float]]:
-    provider = FantasyCalcProvider(api_key=api_key or None)
-    return provider.fetch_trade_history(fc_player_id, _fmt)
+    return get_store().get_or_fetch_trade_history(
+        fc_player_id,
+        fmt.cache_key(),
+        lambda: FantasyCalcProvider(api_key=api_key or None).fetch_trade_history(
+            fc_player_id, fmt
+        ),
+        force=False,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Preferences (persisted per Sleeper username)
+# ---------------------------------------------------------------------------
+
+_PREF_WIDGET_KEYS = (
+    "w_fantasycalc", "w_ktc", "w_draftsharks", "w_age", "w_trend", "w_injury",
+    "w_adp", "fmt_override", "pref_num_qbs", "pref_ppr", "pref_te_premium",
+    "pref_fairness", "pref_include_picks", "pref_mutual_only",
+    "pref_timeline_fit", "arb_threshold",
+)
+
+
+def _reset_pref_widgets_on_user_change(username: str) -> None:
+    """Clear preference widget state when the active user changes so the new
+    user's saved preferences seed the widgets via their ``value=`` defaults."""
+    if st.session_state.get("_prefs_user") != username:
+        for key in _PREF_WIDGET_KEYS:
+            st.session_state.pop(key, None)
+        st.session_state["_prefs_user"] = username
+
+
+def _collect_preferences(username: str) -> UserPreferences:
+    """Build a UserPreferences from the current widget state."""
+    ss = st.session_state
+    weights = ValueWeights(
+        source_weights=(
+            ("fantasycalc", float(ss.get("w_fantasycalc", 0.5))),
+            ("ktc", float(ss.get("w_ktc", 0.3))),
+            ("draftsharks", float(ss.get("w_draftsharks", 0.2))),
+        ),
+        age_weight=float(ss.get("w_age", 0.5)),
+        trend_weight=float(ss.get("w_trend", 0.0)),
+        injury_weight=float(ss.get("w_injury", 0.0)),
+        adp_divergence_weight=float(ss.get("w_adp", 0.0)),
+    )
+    prefs = UserPreferences(
+        username=username,
+        override_enabled=bool(ss.get("fmt_override", False)),
+        num_qbs=ss.get("pref_num_qbs"),
+        ppr=ss.get("pref_ppr"),
+        te_premium=ss.get("pref_te_premium"),
+        fairness_weight=ss.get("pref_fairness", 50) / 100.0,
+        include_picks=bool(ss.get("pref_include_picks", True)),
+        mutual_only=bool(ss.get("pref_mutual_only", True)),
+        timeline_fit=bool(ss.get("pref_timeline_fit", True)),
+        arb_threshold=ss.get("arb_threshold", 20) / 100.0,
+    )
+    apply_weights_to_prefs(prefs, weights)
+    return prefs
+
+
+def _save_preferences_if_changed(
+    store: DtfStore, username: str, loaded: UserPreferences
+) -> None:
+    if not username:
+        return
+    current = _collect_preferences(username)
+    fields = set(current.model_dump()) - {"updated_at"}
+    changed = any(getattr(current, f) != getattr(loaded, f) for f in fields)
+    if changed:
+        store.save_preferences(current)
+
+
+def render_refresh_controls() -> None:
+    """Sidebar buttons that force a one-shot refetch of cached data."""
+    st.session_state.setdefault("refresh_token", 0)
+    st.sidebar.markdown("---")
+    col1, col2 = st.sidebar.columns(2)
+    if col1.button("🔄 Values", help="Refetch player values from the sources"):
+        st.session_state["force_refresh"] = {"values"}
+        st.session_state["refresh_token"] += 1
+        st.rerun()
+    if col2.button("🔄 League", help="Refetch Sleeper league, rosters, and picks"):
+        st.session_state["force_refresh"] = {"league"}
+        st.session_state["refresh_token"] += 1
+        st.rerun()
+
+
+def _staleness(store: DtfStore, kind: str, key: str) -> str:
+    """Short 'cached <ago>' string for a resource, or ''."""
+    ts = store.last_fetched(kind, key)
+    if ts is None:
+        return ""
+    # SQLite drops tzinfo, so a stored UTC timestamp reads back naive.
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    delta = datetime.now(timezone.utc) - ts
+    secs = max(0, int(delta.total_seconds()))
+    if secs < 3600:
+        ago = f"{secs // 60}m"
+    elif secs < 86400:
+        ago = f"{secs // 3600}h"
+    else:
+        ago = f"{secs // 86400}d"
+    return f"cached {ago} ago"
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +360,8 @@ trend, injury, and ADP adjustments.
 
 
 def main() -> None:
+    store = get_store()
+    render_refresh_controls()
     cfg = render_connection_sidebar(
         fetch_user, fetch_leagues, get_parse_api_key() or "", CURRENT_SEASON
     )
@@ -212,9 +369,18 @@ def main() -> None:
     user_data: Optional[dict] = cfg["user_data"]
     league_id: Optional[str] = cfg["league_id"]
     api_key: str = cfg["api_key"]
+    username: str = cfg["username"]
+
+    prefs = (
+        store.load_preferences(username)
+        if username
+        else UserPreferences(username="")
+    )
+    _reset_pref_widgets_on_user_change(username)
 
     if not user_data or not league_id:
         render_welcome()
+        st.session_state.pop("force_refresh", None)
         return
 
     # ---- League data ----
@@ -224,13 +390,16 @@ def main() -> None:
     league = league_data["league"]
     rosters = league_data["rosters"]
 
-    fmt = render_format_panel(detect_league_format(league))
-    weights = render_value_model()
+    fmt = render_format_panel(detect_league_format(league), prefs)
+    weights = render_value_model(weights_from_prefs(prefs))
 
     # ---- Player values ----
     if api_key:
         set_parse_api_key_env(api_key)
-    sources, source_errors = fetch_source_values(fmt.cache_key(), api_key, fmt)
+    sources, source_errors = fetch_source_values(fmt, api_key)
+    caption = _staleness(store, "source", fmt.cache_key())
+    if caption:
+        st.sidebar.caption(f"Player values {caption}")
     engine = ValueEngine(weights)
     valuations = engine.blend(sources)
 
@@ -242,7 +411,6 @@ def main() -> None:
         )
 
     # One local snapshot per day powers the Trends tab
-    store = ValueStore()
     if valuations and not store.has_snapshot():
         store.save_snapshot(valuations)
 
@@ -375,23 +543,25 @@ def main() -> None:
     with tabs[3]:
         render_best_trades(
             my_assets, all_rosters, name_values, headcount_need, analyzer,
-            counterparty_needs, profiles_by_team, my_classification,
+            counterparty_needs, profiles_by_team, my_classification, prefs,
         )
     with tabs[4]:
         render_trade_targets(
             my_assets, all_rosters, name_values, headcount_need, analyzer, name_map
         )
     with tabs[5]:
-        render_arbitrage(sources, analyzer)
+        render_arbitrage(sources, analyzer, prefs)
     with tabs[6]:
         render_trends(
             valuations,
             store,
             market_insights,
-            fetch_history=lambda pid: fetch_player_history(
-                pid, fmt.cache_key(), api_key, fmt
-            ),
+            fetch_history=lambda pid: fetch_player_history(pid, fmt, api_key),
         )
+
+    # Persist any preference changes and clear the one-shot refresh flag.
+    _save_preferences_if_changed(store, username, prefs)
+    st.session_state.pop("force_refresh", None)
 
 
 if __name__ == "__main__":
