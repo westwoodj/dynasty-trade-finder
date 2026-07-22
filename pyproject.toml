@@ -1,0 +1,17 @@
+[project]
+name = "dynasty-trade-finder"
+version = "0.1.0"
+description = "Dynasty Superflex PPR fantasy football trade analysis tool"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pandas>=3.0.3",
+    "requests>=2.34.2",
+    "streamlit>=1.60.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-mock>=3.15.1",
+]

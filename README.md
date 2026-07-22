@@ -19,7 +19,7 @@ Superflex PPR fantasy football.
 ```
 dynasty-trade-finder/
 ├── app.py                  # Streamlit web UI
-├── requirements.txt
+├── pyproject.toml
 ├── src/
 │   ├── sleeper_client.py   # Sleeper public REST API client
 │   ├── parse_bot_client.py # Parse.bot API client (KTC + FantasyCalc extraction)
@@ -36,7 +36,7 @@ dynasty-trade-finder/
 ### 1. Install dependencies
 
 ```bash
-pip install -r requirements.txt
+uv sync
 ```
 
 ### 2. Configure your Parse.bot API key
