@@ -8,27 +8,74 @@ Run locally::
 
 Configuration
 -------------
-Provide your Parse.bot API key via the sidebar input or by adding it to
+Player values come from the typed Parse API clients (FantasyCalc,
+KeepTradeCut, DraftSharks).  Provide your Parse API key via the sidebar,
+the ``PARSE_API_KEY`` environment variable, or
 ``.streamlit/secrets.toml``::
 
-    [parse_bot]
+    [parse]
     api_key = "your-key-here"
+
+On a fresh checkout the generated clients must be synced first::
+
+    uv run parse sync
 """
 
 from __future__ import annotations
 
-import os
 from datetime import datetime
 from typing import Optional
 
-import pandas as pd
 import requests
 import streamlit as st
 
-from src.parse_bot_client import ParseBotClient, PlayerValue, normalize_name
+from src.config import get_parse_api_key, set_parse_api_key_env
+from src.data_providers import (
+    FantasyCalcProvider,
+    NormalizedPlayerValue,
+    fetch_all_sources,
+)
+from src.insights import (
+    classify_teams,
+    find_buy_low_sell_high,
+    profile_team,
+    replacement_baselines,
+    value_based_need,
+)
+from src.league_settings import (
+    LeagueFormat,
+    detect_league_format,
+    position_multipliers,
+)
+from src.pick_valuation import (
+    build_pick_assets,
+    future_seasons,
+    resolve_pick_ownership,
+)
 from src.sleeper_client import SleeperClient
-from src.trade_analyzer import ArbitrageOpportunity, TradeAnalyzer, TradeProposal
-from src.trade_calculator import TradeAsset, TradeCalculator, TradeResult
+from src.trade_analyzer import TradeAnalyzer
+from src.trade_calculator import TradeCalculator
+from src.ui.components import (
+    build_name_map,
+    build_player_lookup,
+    build_user_lookup,
+    roster_valuations,
+    team_names_by_roster,
+)
+from src.ui.sidebar import (
+    render_connection_sidebar,
+    render_diagnostics,
+    render_format_panel,
+    render_value_model,
+)
+from src.ui.tabs_arbitrage import render_arbitrage
+from src.ui.tabs_league import render_league_overview
+from src.ui.tabs_roster import render_my_roster
+from src.ui.tabs_targets import render_trade_targets
+from src.ui.tabs_trades import render_best_trades, render_trade_explorer
+from src.ui.tabs_trends import render_trends
+from src.value_engine import ValueEngine
+from src.value_store import ValueStore
 
 # ---------------------------------------------------------------------------
 # Page configuration
@@ -41,40 +88,11 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
 CURRENT_SEASON = str(datetime.now().year)
 
-# Default superflex PPR starter slots
-SUPERFLEX_STARTER_SLOTS: dict[str, int] = {
-    "QB": 2,
-    "RB": 2,
-    "WR": 3,
-    "TE": 1,
-}
-
-# Draft pick consensus values (0-100 normalised scale)
-PICK_VALUES: dict[tuple[int, int], float] = {
-    (1, 1): 90.0, (1, 2): 78.0, (1, 3): 65.0,
-    (2, 1): 42.0, (2, 2): 32.0, (2, 3): 25.0,
-    (3, 1): 16.0, (3, 2): 11.0, (3, 3): 8.0,
-    (4, 1): 5.0,  (4, 2): 3.5,  (4, 3): 2.5,
-}
-
-POSITION_COLORS: dict[str, str] = {
-    "QB": "#FF6B6B",
-    "RB": "#4ECDC4",
-    "WR": "#45B7D1",
-    "TE": "#96CEB4",
-}
-
-POSITIONS = ["QB", "RB", "WR", "TE"]
-
 
 # ---------------------------------------------------------------------------
-# Sleeper API helpers (cached)
+# Cached fetchers
 # ---------------------------------------------------------------------------
 
 
@@ -103,6 +121,20 @@ def fetch_league_data(league_id: str) -> dict:
     return {"league": league, "rosters": rosters, "users": users}
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def fetch_draft_data(league_id: str) -> dict:
+    client = SleeperClient()
+    try:
+        drafts = client.get_league_drafts(league_id) or []
+    except Exception:
+        drafts = []
+    try:
+        traded_picks = client.get_league_traded_picks(league_id) or []
+    except Exception:
+        traded_picks = []
+    return {"drafts": drafts, "traded_picks": traded_picks}
+
+
 @st.cache_data(ttl=3600, show_spinner="Downloading NFL player list (~5 MB)…")
 def fetch_nfl_players() -> dict:
     try:
@@ -111,455 +143,60 @@ def fetch_nfl_players() -> dict:
         return {}
 
 
-# ---------------------------------------------------------------------------
-# Parse.bot helpers (cached)
-# ---------------------------------------------------------------------------
+@st.cache_data(ttl=1800, show_spinner="Fetching player values…")
+def fetch_source_values(
+    fmt_key: str, api_key: str, _fmt: LeagueFormat
+) -> tuple[dict[str, list[NormalizedPlayerValue]], dict[str, str]]:
+    """Fetch every value source once per league format per 30 minutes.
+
+    ``fmt_key``/``api_key`` are the cache keys; ``_fmt`` (underscored, so
+    unhashed) carries the actual format object.
+    """
+    return fetch_all_sources(_fmt, api_key=api_key or None)
 
 
-@st.cache_data(ttl=1800, show_spinner="Fetching player values from trusted sources…")
-def fetch_player_values(api_key: str) -> dict[str, list[PlayerValue]]:
-    client = ParseBotClient(api_key=api_key)
-    return client.get_all_player_values()
-
-
-@st.cache_data(ttl=1800)
-def fetch_consensus_values(api_key: str) -> dict[str, float]:
-    values_by_source = fetch_player_values(api_key)
-    client = ParseBotClient(api_key=api_key)
-    return client.get_consensus_values(values_by_source)
-
-
-# ---------------------------------------------------------------------------
-# Data-building helpers
-# ---------------------------------------------------------------------------
-
-
-def build_player_lookup(nfl_players: dict) -> dict[str, dict]:
-    """Return {player_id: {full_name, position, team, age}} for skill players."""
-    skill_positions = {"QB", "RB", "WR", "TE"}
-    return {
-        pid: {
-            "name": p.get("full_name", ""),
-            "position": p.get("position", ""),
-            "team": p.get("team", "") or "FA",
-            "age": p.get("age"),
-        }
-        for pid, p in nfl_players.items()
-        if p.get("position") in skill_positions and p.get("full_name")
-    }
-
-
-def build_user_lookup(users: list[dict]) -> dict[str, dict]:
-    """Return {roster_id: {display_name, team_name}}."""
-    return {
-        str(u["user_id"]): {
-            "display_name": u.get("display_name", "Unknown"),
-            "team_name": u.get("metadata", {}).get("team_name")
-            or u.get("display_name", "Unknown"),
-        }
-        for u in users
-    }
-
-
-def roster_to_assets(
-    roster: dict,
-    player_lookup: dict[str, dict],
-    consensus_values: dict[str, float],
-) -> list[TradeAsset]:
-    """Convert a Sleeper roster dict to a list of :class:`TradeAsset`."""
-    assets: list[TradeAsset] = []
-    for pid in roster.get("players") or []:
-        player = player_lookup.get(pid)
-        if not player or not player["name"]:
-            continue
-        key = normalize_name(player["name"])
-        val = consensus_values.get(key, 0.0)
-        assets.append(
-            TradeAsset(
-                name=player["name"],
-                position=player["position"],
-                team=player["team"],
-                age=player.get("age"),
-                value=val,
-            )
-        )
-    return assets
-
-
-def pick_value(year_offset: int, round_num: int) -> float:
-    """Estimate consensus value for a future draft pick."""
-    key = (round_num, min(year_offset + 1, 3))
-    return PICK_VALUES.get(key, 1.0)
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_player_history(
+    fc_player_id: str, fmt_key: str, api_key: str, _fmt: LeagueFormat
+) -> list[tuple[str, float]]:
+    provider = FantasyCalcProvider(api_key=api_key or None)
+    return provider.fetch_trade_history(fc_player_id, _fmt)
 
 
 # ---------------------------------------------------------------------------
-# Sidebar — setup
+# Welcome page
 # ---------------------------------------------------------------------------
 
 
-def render_sidebar() -> dict:
-    """Render the sidebar and return collected configuration."""
-    st.sidebar.title("🏈 Dynasty Trade Finder")
-    st.sidebar.markdown("---")
-
-    # Parse.bot API key
-    api_key = st.sidebar.text_input(
-        "Parse.bot API key",
-        value=st.secrets.get("parse_bot", {}).get("api_key", ""),
-        type="password",
-        help="Required to fetch player values from KTC and FantasyCalc.",
-    )
-
-    st.sidebar.markdown("---")
-
-    # Sleeper username
-    username = st.sidebar.text_input(
-        "Sleeper username",
-        help="Your Sleeper username (not display name).",
-    )
-    season = st.sidebar.selectbox(
-        "Season",
-        options=[str(y) for y in range(int(CURRENT_SEASON), int(CURRENT_SEASON) - 3, -1)],
-    )
-
-    user_data: Optional[dict] = None
-    leagues: list[dict] = []
-    league_id: Optional[str] = None
-
-    if username:
-        user_data = fetch_user(username)
-        if user_data is None:
-            st.sidebar.error("Username not found.")
-        else:
-            leagues = fetch_leagues(user_data["user_id"], season)
-            if not leagues:
-                st.sidebar.warning("No leagues found for this season.")
-            else:
-                league_names = {
-                    lg["league_id"]: lg.get("name", lg["league_id"])
-                    for lg in leagues
-                }
-                league_id = st.sidebar.selectbox(
-                    "League",
-                    options=list(league_names),
-                    format_func=lambda lid: league_names[lid],
-                )
-
-    return {
-        "api_key": api_key,
-        "username": username,
-        "user_data": user_data,
-        "leagues": leagues,
-        "league_id": league_id,
-        "season": season,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Tab 1 — League overview
-# ---------------------------------------------------------------------------
-
-
-def render_league_overview(
-    league_data: dict,
-    user_lookup: dict,
-    player_lookup: dict,
-    consensus_values: dict[str, float],
-) -> None:
-    st.header("🏟️ League Overview")
-    rosters = league_data["rosters"]
-    league = league_data["league"]
-
-    st.markdown(f"**League:** {league.get('name')} &nbsp;|&nbsp; "
-                f"**Season:** {league.get('season')} &nbsp;|&nbsp; "
-                f"**Teams:** {league.get('total_rosters')}")
-
-    rows = []
-    for roster in rosters:
-        uid = str(roster.get("owner_id", ""))
-        user = user_lookup.get(uid, {})
-        team_name = user.get("team_name", user.get("display_name", f"Team {roster['roster_id']}"))
-        settings = roster.get("settings") or {}
-        wins = settings.get("wins", 0)
-        losses = settings.get("losses", 0)
-        pts = settings.get("fpts", 0)
-
-        assets = roster_to_assets(roster, player_lookup, consensus_values)
-        roster_value = sum(a.value for a in assets)
-        pos_counts = {}
-        for a in assets:
-            pos_counts[a.position] = pos_counts.get(a.position, 0) + 1
-
-        rows.append(
-            {
-                "Team": team_name,
-                "W": wins,
-                "L": losses,
-                "PF": pts,
-                "Roster Value": round(roster_value, 1),
-                "QB": pos_counts.get("QB", 0),
-                "RB": pos_counts.get("RB", 0),
-                "WR": pos_counts.get("WR", 0),
-                "TE": pos_counts.get("TE", 0),
-                "Total": len(assets),
-            }
-        )
-
-    df = pd.DataFrame(rows).sort_values("Roster Value", ascending=False).reset_index(drop=True)
-    st.dataframe(df, use_container_width=True)
-
-
-# ---------------------------------------------------------------------------
-# Tab 2 — My roster
-# ---------------------------------------------------------------------------
-
-
-def render_my_roster(
-    my_roster_raw: dict,
-    player_lookup: dict,
-    consensus_values: dict[str, float],
-    calculator: TradeCalculator,
-) -> list[TradeAsset]:
-    st.header("📋 My Roster")
-    assets = roster_to_assets(my_roster_raw, player_lookup, consensus_values)
-
-    if not assets:
-        st.info("No skill-position players found on your roster.")
-        return []
-
-    need = calculator.calculate_positional_need(assets, SUPERFLEX_STARTER_SLOTS)
-
-    col1, col2 = st.columns([3, 1])
-
-    with col1:
-        rows = [
-            {
-                "Player": a.name,
-                "Pos": a.position,
-                "Team": a.team,
-                "Age": a.age or "—",
-                "Value": round(a.value, 1),
-            }
-            for a in sorted(assets, key=lambda x: x.value, reverse=True)
-        ]
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
-    with col2:
-        st.subheader("Positional Needs")
-        for pos in POSITIONS:
-            n = need.get(pos, 0)
-            bar = "🟩" * min(n, 5) + "⬜" * max(0, 5 - n)
-            st.markdown(f"**{pos}** {bar} ({n})")
-
-    return assets
-
-
-# ---------------------------------------------------------------------------
-# Tab 3 — Trade explorer
-# ---------------------------------------------------------------------------
-
-
-def render_trade_explorer(
-    my_assets: list[TradeAsset],
-    all_rosters: dict[str, list[TradeAsset]],
-    calculator: TradeCalculator,
-    positional_need: dict[str, int],
-) -> None:
-    st.header("🔄 Trade Explorer")
-    st.markdown("Build a trade manually and see how it scores.")
-
-    all_other_players = [a for assets in all_rosters.values() for a in assets]
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.subheader("I give…")
-        giving_names = st.multiselect(
-            "Select players from your roster",
-            options=[a.name for a in sorted(my_assets, key=lambda x: x.value, reverse=True)],
-            key="giving",
-        )
-        giving = [a for a in my_assets if a.name in giving_names]
-
-    with col2:
-        st.subheader("I receive…")
-        receiving_names = st.multiselect(
-            "Select players from other teams",
-            options=[a.name for a in sorted(all_other_players, key=lambda x: x.value, reverse=True)],
-            key="receiving",
-        )
-        receiving = [a for a in all_other_players if a.name in receiving_names]
-
-    if giving and receiving:
-        result = calculator.calculate_trade_value(giving, receiving, positional_need)
-        _render_trade_result(result)
-    else:
-        st.info("Select at least one player on each side to evaluate a trade.")
-
-
-def _render_trade_result(result: TradeResult) -> None:
-    grade_colors = {
-        "A+": "green", "A": "green", "B+": "green",
-        "B": "orange",
-        "C+": "red", "C": "red", "D": "red", "F": "red",
-    }
-    color = grade_colors.get(result.grade, "grey")
-
-    st.markdown("---")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Giving value", f"{result.giving_value:.1f}")
-    c2.metric("Receiving value", f"{result.receiving_value:.1f}")
-    delta_label = f"+{result.value_delta:.1f}" if result.value_delta >= 0 else f"{result.value_delta:.1f}"
-    c3.metric("Value delta", delta_label)
-    c4.markdown(
-        f"<h2 style='color:{color}; text-align:center'>{result.grade}</h2>",
-        unsafe_allow_html=True,
-    )
-    st.markdown(f"**{result.summary}**")
-
-
-# ---------------------------------------------------------------------------
-# Tab 4 — Best trades
-# ---------------------------------------------------------------------------
-
-
-def render_best_trades(
-    my_assets: list[TradeAsset],
-    all_rosters: dict[str, list[TradeAsset]],
-    consensus_values: dict[str, float],
-    positional_need: dict[str, int],
-    analyzer: TradeAnalyzer,
-) -> None:
-    st.header("⚡ Best Trades")
+def render_welcome() -> None:
+    st.title("🏈 Dynasty Trade Finder")
     st.markdown(
-        "Automatically calculated trade proposals that improve your team's value. "
-        "Proposals are ranked by value gain, adjusted for positional need."
+        """
+Welcome to **Dynasty Trade Finder** — a market-driven trade analysis tool
+for dynasty fantasy football leagues on Sleeper.
+
+### Getting started
+1. Enter your **Sleeper username** in the sidebar.
+2. Select your **season** and **league** — scoring format (superflex, PPR,
+   TE premium) is detected automatically.
+3. Add your **Parse API key** to pull live player values from
+   FantasyCalc, KeepTradeCut, and DraftSharks.
+
+### Features
+| Tab | Description |
+|-----|-------------|
+| 🏟️ League Overview | Roster values, contender/rebuilder timelines for every team |
+| 📋 My Roster | Your players' blended values with age/trend/injury adjustments |
+| 🔄 Trade Explorer | Build trades with players **and picks**, see both sides' grades |
+| ⚡ Best Trades | Auto-generated proposals filtered to trades the other side might accept |
+| 🎯 Trade Targets | Acquisition candidates ranked by fit for your roster |
+| 📊 Arbitrage | Players the value sources disagree on — buy low, sell high |
+| 📈 Trends | 30-day market movers, buy-low/sell-high flags, value history charts |
+
+Tune the **value model** in the sidebar: source blend weights plus age,
+trend, injury, and ADP adjustments.
+        """
     )
-
-    with st.spinner("Analysing trade opportunities…"):
-        proposals = analyzer.find_best_trades(
-            my_roster=my_assets,
-            all_rosters=all_rosters,
-            player_values=consensus_values,
-            positional_need=positional_need,
-            max_assets_per_side=2,
-            top_n=25,
-        )
-
-    if not proposals:
-        st.info("No favourable trades found. Try refreshing player values.")
-        return
-
-    pos_filter = st.multiselect(
-        "Filter by position received",
-        options=POSITIONS,
-        default=POSITIONS,
-        key="best_trades_pos_filter",
-    )
-
-    filtered = [
-        p for p in proposals
-        if any(a.position in pos_filter for a in p.receiving)
-    ]
-
-    rows = []
-    for p in filtered:
-        giving_str = " + ".join(a.display_name for a in p.giving)
-        receiving_str = " + ".join(a.display_name for a in p.receiving)
-        rows.append(
-            {
-                "Give": giving_str,
-                "Receive": receiving_str,
-                "From": p.their_team,
-                "Give Value": round(p.result.giving_value, 1),
-                "Receive Value": round(p.result.receiving_value, 1),
-                "Delta": round(p.result.value_delta, 1),
-                "Grade": p.result.grade,
-            }
-        )
-
-    if rows:
-        df = pd.DataFrame(rows)
-        st.dataframe(df, use_container_width=True, hide_index=True)
-    else:
-        st.info("No proposals match the selected position filter.")
-
-
-# ---------------------------------------------------------------------------
-# Tab 5 — Arbitrage
-# ---------------------------------------------------------------------------
-
-
-def render_arbitrage(
-    values_by_source: dict[str, list[PlayerValue]],
-    analyzer: TradeAnalyzer,
-) -> None:
-    st.header("📊 Arbitrage Opportunities")
-    st.markdown(
-        "Players where **KTC** and **FantasyCalc** disagree significantly.  "
-        "**Buy** candidates are undervalued by one source — try to acquire them.  "
-        "**Sell** candidates are overvalued by one source — consider moving them."
-    )
-
-    # Convert PlayerValue lists to {source: {name: normalised_value}} dicts
-    normalised: dict[str, dict[str, float]] = {}
-    for source, players in values_by_source.items():
-        if not players:
-            continue
-        max_val = max(p.value for p in players)
-        normalised[source] = {
-            normalize_name(p.name): (p.value / max_val * 100) if max_val > 0 else 0
-            for p in players
-        }
-
-    threshold = st.slider(
-        "Minimum spread threshold (%)",
-        min_value=10,
-        max_value=50,
-        value=20,
-        step=5,
-        key="arb_threshold",
-    ) / 100.0
-
-    opps = analyzer.find_arbitrage(normalised, spread_threshold=threshold)
-
-    if not opps:
-        st.info("No arbitrage opportunities found at this threshold.")
-        return
-
-    rec_filter = st.radio(
-        "Show",
-        options=["All", "Buy", "Sell"],
-        horizontal=True,
-        key="arb_rec_filter",
-    )
-
-    if rec_filter != "All":
-        opps = [o for o in opps if o.recommendation == rec_filter.lower()]
-
-    rows = []
-    for o in opps:
-        source_cols = {
-            f"{src} value": round(val, 1)
-            for src, val in o.values_by_source.items()
-        }
-        rows.append(
-            {
-                "Player": o.player_name,
-                "Consensus": round(o.consensus_value, 1),
-                "Spread": f"{o.spread_pct * 100:.0f}%",
-                "High source": o.high_source,
-                "Low source": o.low_source,
-                "Rec.": o.recommendation.upper(),
-                **source_cols,
-            }
-        )
-
-    if rows:
-        df = pd.DataFrame(rows)
-        st.dataframe(df, use_container_width=True, hide_index=True)
-    else:
-        st.info("No opportunities match the current filter.")
 
 
 # ---------------------------------------------------------------------------
@@ -568,108 +205,193 @@ def render_arbitrage(
 
 
 def main() -> None:
-    cfg = render_sidebar()
+    cfg = render_connection_sidebar(
+        fetch_user, fetch_leagues, get_parse_api_key() or "", CURRENT_SEASON
+    )
 
-    api_key: str = cfg["api_key"]
-    league_id: Optional[str] = cfg["league_id"]
     user_data: Optional[dict] = cfg["user_data"]
+    league_id: Optional[str] = cfg["league_id"]
+    api_key: str = cfg["api_key"]
 
     if not user_data or not league_id:
-        st.title("🏈 Dynasty Trade Finder")
-        st.markdown(
-            """
-Welcome to **Dynasty Trade Finder** — an arbitrage-focused trade analysis tool
-for Dynasty Superflex PPR fantasy football.
-
-### Getting started
-1. Enter your **Sleeper username** in the sidebar.
-2. Select your **season** and **league**.
-3. *(Optional)* Add your **Parse.bot API key** to unlock live player values
-   from KeepTradeCut and FantasyCalc.
-
-### Features
-| Tab | Description |
-|-----|-------------|
-| 🏟️ League Overview | Roster values and positional depth for every team |
-| 📋 My Roster | Your players ranked by consensus value with need assessment |
-| 🔄 Trade Explorer | Build trades manually and get an instant grade |
-| ⚡ Best Trades | Auto-generated favourable trade proposals |
-| 📊 Arbitrage | Players where KTC and FantasyCalc disagree — buy low / sell high |
-            """
-        )
+        render_welcome()
         return
 
-    # ---- Load league data ----
+    # ---- League data ----
     with st.spinner("Loading league data…"):
         league_data = fetch_league_data(league_id)
         nfl_players = fetch_nfl_players()
-
-    player_lookup = build_player_lookup(nfl_players)
-    user_lookup = build_user_lookup(league_data["users"])
+    league = league_data["league"]
     rosters = league_data["rosters"]
 
-    # Identify my roster (owner_id matches logged-in user)
+    fmt = render_format_panel(detect_league_format(league))
+    weights = render_value_model()
+
+    # ---- Player values ----
+    if api_key:
+        set_parse_api_key_env(api_key)
+    sources, source_errors = fetch_source_values(fmt.cache_key(), api_key, fmt)
+    engine = ValueEngine(weights)
+    valuations = engine.blend(sources)
+
+    if not valuations:
+        st.warning(
+            "No player values available. Add a Parse API key in the sidebar "
+            "(or run `uv run parse login` / `uv run parse sync`). Rosters "
+            "will show with zero values."
+        )
+
+    # One local snapshot per day powers the Trends tab
+    store = ValueStore()
+    if valuations and not store.has_snapshot():
+        store.save_snapshot(valuations)
+
+    # ---- Lookups and roster conversion ----
+    player_lookup = build_player_lookup(nfl_players)
+    user_lookup = build_user_lookup(league_data["users"])
+    team_names = team_names_by_roster(rosters, user_lookup)
+    sleeper_map = engine.sleeper_value_map(valuations)
+    name_map = build_name_map(valuations)
+    name_values = engine.name_value_map(valuations)
+
     my_user_id = user_data["user_id"]
     my_roster_raw = next(
         (r for r in rosters if str(r.get("owner_id")) == str(my_user_id)),
         rosters[0] if rosters else {},
     )
+    my_rid = my_roster_raw.get("roster_id")
 
-    # ---- Load player values ----
-    consensus_values: dict[str, float] = {}
-    values_by_source: dict[str, list[PlayerValue]] = {}
+    roster_pairs: dict[int, list] = {}
+    roster_assets: dict[int, list] = {}
+    unmatched: list[str] = []
+    for roster in rosters:
+        rid = roster.get("roster_id")
+        if rid is None:
+            continue
+        pairs = roster_valuations(roster, player_lookup, sleeper_map, name_map)
+        roster_pairs[rid] = pairs
+        roster_assets[rid] = [asset for asset, _ in pairs]
+        unmatched.extend(a.name for a, v in pairs if v is None)
 
-    if api_key:
-        try:
-            values_by_source = fetch_player_values(api_key)
-            consensus_values = fetch_consensus_values(api_key)
-        except Exception as exc:
-            st.warning(f"Could not fetch player values: {exc}")
-    else:
-        st.info(
-            "Add a Parse.bot API key in the sidebar to see live player values "
-            "from KTC and FantasyCalc.  Trades will still be evaluated, but "
-            "all values will show as 0."
+    render_diagnostics(source_errors, sources, unmatched if valuations else [])
+
+    # ---- Draft picks (strength ranks project pick slots) ----
+    totals = {rid: sum(a.value for a in assets) for rid, assets in roster_assets.items()}
+    strength_rank = {
+        rid: position + 1
+        for position, (rid, _) in enumerate(
+            sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
         )
-
-    # ---- Build roster assets ----
-    my_assets = roster_to_assets(my_roster_raw, player_lookup, consensus_values)
-    calculator = TradeCalculator()
-    positional_need = calculator.calculate_positional_need(
-        my_assets, SUPERFLEX_STARTER_SLOTS
+    }
+    draft_data = fetch_draft_data(league_id)
+    draft_rounds = 4
+    if draft_data["drafts"]:
+        draft_rounds = int(
+            (draft_data["drafts"][0].get("settings") or {}).get("rounds", 4)
+        )
+    league_season = league.get("season", CURRENT_SEASON)
+    owned_picks = resolve_pick_ownership(
+        rosters,
+        draft_data["traded_picks"],
+        future_seasons(league_season),
+        rounds=draft_rounds,
     )
+    picks_by_roster = build_pick_assets(
+        owned_picks, strength_rank, fmt, league_season, team_names
+    )
+
+    # ---- Team profiles ----
+    profiles: dict[int, object] = {}
+    for roster in rosters:
+        rid = roster.get("roster_id")
+        if rid is None:
+            continue
+        settings = roster.get("settings") or {}
+        profiles[rid] = profile_team(
+            rid,
+            team_names.get(rid, f"Team {rid}"),
+            roster_assets.get(rid, []),
+            picks_by_roster.get(rid, []),
+            wins=settings.get("wins", 0),
+            losses=settings.get("losses", 0),
+        )
+    classify_teams(profiles)  # league-relative contender/rebuilder labels
+    profiles_by_team = {p.team_name: p for p in profiles.values()}
+    my_profile = profiles.get(my_rid)
+    my_classification = my_profile.classification if my_profile else "balanced"
+
+    # ---- Trade engine ----
+    calculator = TradeCalculator(position_multipliers(fmt))
     analyzer = TradeAnalyzer(calculator)
 
-    # Other teams' rosters as {team_name: [TradeAsset]}
-    all_rosters: dict[str, list[TradeAsset]] = {}
+    my_players = roster_assets.get(my_rid, [])
+    my_picks = picks_by_roster.get(my_rid, [])
+    my_assets = my_players + my_picks
+
+    headcount_need = calculator.calculate_positional_need(my_players, fmt.slots_dict())
+    vor_need = None
+    if valuations:
+        baselines = replacement_baselines(valuations, fmt)
+        vor_need = value_based_need(my_players, baselines, fmt.slots_dict())
+
+    all_rosters: dict[str, list] = {}
+    counterparty_needs: dict[str, dict] = {}
     for roster in rosters:
-        if str(roster.get("owner_id")) == str(my_user_id):
+        rid = roster.get("roster_id")
+        if rid is None or rid == my_rid:
             continue
-        uid = str(roster.get("owner_id", ""))
-        team = user_lookup.get(uid, {}).get(
-            "team_name", f"Team {roster['roster_id']}"
+        team = team_names.get(rid, f"Team {rid}")
+        all_rosters[team] = roster_assets.get(rid, []) + picks_by_roster.get(rid, [])
+        counterparty_needs[team] = calculator.calculate_positional_need(
+            roster_assets.get(rid, []), fmt.slots_dict()
         )
-        all_rosters[team] = roster_to_assets(roster, player_lookup, consensus_values)
+
+    market_insights = find_buy_low_sell_high(valuations, store.get_deltas(30))
 
     # ---- Tabs ----
     tabs = st.tabs(
-        ["🏟️ League Overview", "📋 My Roster", "🔄 Trade Explorer", "⚡ Best Trades", "📊 Arbitrage"]
+        [
+            "🏟️ League Overview",
+            "📋 My Roster",
+            "🔄 Trade Explorer",
+            "⚡ Best Trades",
+            "🎯 Trade Targets",
+            "📊 Arbitrage",
+            "📈 Trends",
+        ]
     )
 
     with tabs[0]:
-        render_league_overview(league_data, user_lookup, player_lookup, consensus_values)
-
+        render_league_overview(league, profiles, roster_assets)
     with tabs[1]:
-        render_my_roster(my_roster_raw, player_lookup, consensus_values, calculator)
-
+        render_my_roster(
+            roster_pairs.get(my_rid, []), my_picks, headcount_need, vor_need
+        )
     with tabs[2]:
-        render_trade_explorer(my_assets, all_rosters, calculator, positional_need)
-
+        render_trade_explorer(
+            my_assets, all_rosters, calculator, headcount_need,
+            counterparty_needs, valuations,
+        )
     with tabs[3]:
-        render_best_trades(my_assets, all_rosters, consensus_values, positional_need, analyzer)
-
+        render_best_trades(
+            my_assets, all_rosters, name_values, headcount_need, analyzer,
+            counterparty_needs, profiles_by_team, my_classification,
+        )
     with tabs[4]:
-        render_arbitrage(values_by_source, analyzer)
+        render_trade_targets(
+            my_assets, all_rosters, name_values, headcount_need, analyzer, name_map
+        )
+    with tabs[5]:
+        render_arbitrage(sources, analyzer)
+    with tabs[6]:
+        render_trends(
+            valuations,
+            store,
+            market_insights,
+            fetch_history=lambda pid: fetch_player_history(
+                pid, fmt.cache_key(), api_key, fmt
+            ),
+        )
 
 
 if __name__ == "__main__":

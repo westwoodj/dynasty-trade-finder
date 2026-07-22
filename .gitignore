@@ -216,3 +216,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Parse SDK - generated payload is per-key (reveals your API inventory).
+# Ignore everything under the generated package; keep only the committed scaffold.
+parse_apis/src/parse_apis/*
+!parse_apis/src/parse_apis/__init__.py
+!parse_apis/src/parse_apis/py.typed
+.parse/
+
+# Dynasty Trade Finder local value-history database
+data/

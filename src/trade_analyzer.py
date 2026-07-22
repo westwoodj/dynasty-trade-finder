@@ -15,9 +15,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from itertools import combinations
-from typing import Optional
+from typing import Callable, Optional
 
-from .trade_calculator import TradeAsset, TradeCalculator, TradeResult
+from .trade_calculator import (
+    TradeAsset,
+    TradeCalculator,
+    TradeResult,
+    grade_at_least,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -35,6 +40,7 @@ class TradeProposal:
     receiving: list[TradeAsset]
     result: TradeResult
     score: float  # Higher is better for «my_team»
+    their_grade: Optional[str] = None  # counterparty's grade when evaluated
 
 
 @dataclass
@@ -156,6 +162,12 @@ class TradeAnalyzer:
         positional_need: Optional[dict[str, int]] = None,
         max_assets_per_side: int = 2,
         top_n: int = 20,
+        counterparty_needs: Optional[dict[str, dict[str, float]]] = None,
+        min_their_grade: Optional[str] = None,
+        max_per_team: Optional[int] = None,
+        bonus_scorer: Optional[
+            Callable[[str, tuple[TradeAsset, ...], tuple[TradeAsset, ...]], float]
+        ] = None,
     ) -> list[TradeProposal]:
         """
         Enumerate plausible trades and return the most valuable ones.
@@ -172,6 +184,16 @@ class TradeAnalyzer:
                 :meth:`TradeCalculator.calculate_positional_need`.
             max_assets_per_side: Maximum number of assets per side (1 or 2).
             top_n: How many proposals to return.
+            counterparty_needs: Optional ``{team_name: need_scores}`` used to
+                evaluate each trade from the counterparty's perspective.
+            min_their_grade: When set (e.g. ``"C+"``), drop proposals the
+                counterparty would grade worse than this — their positional
+                needs can make a value-losing trade still acceptable to them.
+            max_per_team: When set, keep at most this many proposals per
+                counterparty so the list shows variety across partners
+                instead of many near-duplicate trades against one team.
+            bonus_scorer: Optional ``f(team_name, giving, receiving)`` hook
+                adding to a proposal's score (e.g. timeline fit).
 
         Returns:
             Top *top_n* :class:`TradeProposal` objects sorted by score.
@@ -181,6 +203,7 @@ class TradeAnalyzer:
 
         for team_name, their_roster in all_rosters.items():
             their_assets = _enrich(their_roster, player_values)
+            their_need = (counterparty_needs or {}).get(team_name)
             for n in range(1, max_assets_per_side + 1):
                 for giving in combinations(my_assets, n):
                     for receiving in combinations(their_assets, n):
@@ -189,7 +212,17 @@ class TradeAnalyzer:
                         )
                         if not result.is_favorable:
                             continue
+                        their_grade: Optional[str] = None
+                        if min_their_grade is not None:
+                            their_result = self.calculator.calculate_trade_value(
+                                list(receiving), list(giving), their_need
+                            )
+                            their_grade = their_result.grade
+                            if not grade_at_least(their_grade, min_their_grade):
+                                continue
                         score = self._score(result, receiving, positional_need)
+                        if bonus_scorer is not None:
+                            score += bonus_scorer(team_name, giving, receiving)
                         proposals.append(
                             TradeProposal(
                                 my_team="My Team",
@@ -198,10 +231,24 @@ class TradeAnalyzer:
                                 receiving=list(receiving),
                                 result=result,
                                 score=score,
+                                their_grade=their_grade,
                             )
                         )
 
-        return sorted(proposals, key=lambda p: p.score, reverse=True)[:top_n]
+        ranked = sorted(proposals, key=lambda p: p.score, reverse=True)
+        if max_per_team is None:
+            return ranked[:top_n]
+
+        selected: list[TradeProposal] = []
+        per_team: dict[str, int] = {}
+        for proposal in ranked:
+            if per_team.get(proposal.their_team, 0) >= max_per_team:
+                continue
+            selected.append(proposal)
+            per_team[proposal.their_team] = per_team.get(proposal.their_team, 0) + 1
+            if len(selected) >= top_n:
+                break
+        return selected
 
     # ------------------------------------------------------------------
     # Trade target ranking
