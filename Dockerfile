@@ -6,15 +6,18 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /app
 
-# Copy dependency files first for better layer caching
+# Copy dependency metadata first for better layer caching
 COPY pyproject.toml uv.lock ./
 COPY parse_apis/pyproject.toml parse_apis/pyproject.toml
-COPY parse_apis/src/ parse_apis/src/
+
+# Copy only the minimal parse_apis scaffold needed for editable install
+COPY parse_apis/src/parse_apis/__init__.py parse_apis/src/parse_apis/__init__.py
 
 # Install dependencies (frozen from lockfile, no dev deps)
 RUN uv sync --frozen --no-dev
 
 # Copy the rest of the application
+COPY parse_apis/src/ parse_apis/src/
 COPY .streamlit/ .streamlit/
 COPY src/ src/
 COPY app.py .
