@@ -610,6 +610,11 @@ def main() -> None:
         my_players = roster_assets.get(my_rid, [])
         my_picks = picks_by_roster.get(my_rid, [])
         my_assets = my_players + my_picks
+        # Valued (asset, valuation) pairs incl. picks, for the roster tables in
+        # the Trade Explorer. Picks carry no valuation, so pair them with None.
+        my_pairs = list(roster_pairs.get(my_rid, [])) + [
+            (p, None) for p in my_picks
+        ]
 
         headcount_need = calculator.calculate_positional_need(my_players, fmt.slots_dict())
         vor_need = None
@@ -619,12 +624,16 @@ def main() -> None:
 
         all_rosters: dict[str, list] = {}
         counterparty_needs: dict[str, dict] = {}
+        their_pairs_by_team: dict[str, list] = {}
         for roster in rosters:
             rid = roster.get("roster_id")
             if rid is None or rid == my_rid:
                 continue
             team = team_names.get(rid, f"Team {rid}")
             all_rosters[team] = roster_assets.get(rid, []) + picks_by_roster.get(rid, [])
+            their_pairs_by_team[team] = list(roster_pairs.get(rid, [])) + [
+                (p, None) for p in picks_by_roster.get(rid, [])
+            ]
             counterparty_needs[team] = calculator.calculate_positional_need(
                 roster_assets.get(rid, []), fmt.slots_dict()
             )
@@ -704,7 +713,7 @@ def main() -> None:
         )
     with tabs[2]:
         render_trade_explorer(
-            my_assets, all_rosters, calculator, headcount_need,
+            my_pairs, their_pairs_by_team, calculator, headcount_need,
             counterparty_needs, valuations,
         )
     with tabs[3]:
