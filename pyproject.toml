@@ -6,7 +6,6 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "parse-apis",
-    "pandas>=3.0.3",
     "parse-sdk>=0.2.0",
     "requests>=2.34.2",
     "streamlit>=1.60.0",
@@ -14,6 +13,7 @@ dependencies = [
     "nflreadpy>=0.1.5",
     "python-dotenv>=1.2.2",
     "pg8000>=1.31",
+    "polars>=1.43.0",
 ]
 
 [dependency-groups]

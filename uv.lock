@@ -172,10 +172,10 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "nflreadpy" },
-    { name = "pandas" },
     { name = "parse-apis" },
     { name = "parse-sdk" },
     { name = "pg8000" },
+    { name = "polars" },
     { name = "python-dotenv" },
     { name = "requests" },
     { name = "sqlmodel" },
@@ -191,10 +191,10 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "nflreadpy", specifier = ">=0.1.5" },
-    { name = "pandas", specifier = ">=3.0.3" },
     { name = "parse-apis", editable = "parse_apis" },
     { name = "parse-sdk", specifier = ">=0.2.0" },
     { name = "pg8000", specifier = ">=1.31" },
+    { name = "polars", specifier = ">=1.43.0" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "requests", specifier = ">=2.34.2" },
     { name = "sqlmodel", specifier = ">=0.0.39" },
