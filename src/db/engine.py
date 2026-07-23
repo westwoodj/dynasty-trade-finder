@@ -1,22 +1,26 @@
 """SQLModel engine creation and schema initialization.
 
-The store runs on **Cloud SQL for PostgreSQL** when deployed and falls back to
-a local **SQLite** file for development. Which one is used is decided purely
-from the environment, so no code path is deployment-specific:
+The store runs on a **managed Postgres** (Neon serverless Postgres in
+production) when deployed and falls back to a local **SQLite** file for
+development. Which one is used is decided purely from the environment, so no
+code path is deployment-specific:
 
 * ``DATABASE_URL`` — a full SQLAlchemy URL, used verbatim (with a bare
-  ``postgresql://`` normalized to the pure-Python ``pg8000`` driver). Handy for
-  any managed Postgres.
+  ``postgresql://`` / ``postgres://`` normalized to the pure-Python ``pg8000``
+  driver). This is the production path: point it at Neon (or any managed
+  Postgres). Neon requires TLS and ships URLs with ``?sslmode=require``; since
+  ``pg8000`` doesn't understand libpq's ``sslmode`` param, that is translated
+  into an ``ssl_context`` connect arg (see :func:`get_engine`).
 * ``INSTANCE_CONNECTION_NAME`` + ``DB_USER`` / ``DB_PASS`` / ``DB_NAME`` — the
-  Cloud Run → Cloud SQL pattern: connect over the Unix socket that Cloud Run
-  mounts at ``/cloudsql/<INSTANCE_CONNECTION_NAME>`` when the service is
-  deployed with ``--add-cloudsql-instances``.
+  Cloud Run → Cloud SQL over-the-Unix-socket pattern, still supported for a
+  Cloud SQL deployment but no longer the default managed target.
 * neither set — a SQLite file at ``data/dtf.db`` (local dev / tests).
 """
 
 from __future__ import annotations
 
 import os
+import ssl
 from pathlib import Path
 
 from sqlalchemy import Engine
@@ -43,9 +47,9 @@ def _database_url() -> URL | str | None:
     raw = os.environ.get("DATABASE_URL")
     if raw:
         url = make_url(raw)
-        # Default a bare postgresql:// to pg8000 (pure-Python, no build deps —
-        # matches what ships in the slim image).
-        if url.drivername == "postgresql":
+        # Default a bare postgresql:// (or postgres://, as Neon sometimes emits)
+        # to pg8000 (pure-Python, no build deps — matches the slim image).
+        if url.drivername in ("postgresql", "postgres"):
             url = url.set(drivername="postgresql+pg8000")
         return url
 
@@ -70,18 +74,31 @@ def _database_url() -> URL | str | None:
 def get_engine(db_path: Path | str = DEFAULT_DB_PATH, echo: bool = False) -> Engine:
     """Create the store engine and ensure the schema exists.
 
-    Uses Cloud SQL Postgres when the environment configures it (see module
-    docstring); otherwise a SQLite file at *db_path*. *db_path* only applies to
-    the SQLite fallback.
+    Uses a managed Postgres (Neon, or Cloud SQL) when the environment configures
+    it (see module docstring); otherwise a SQLite file at *db_path*. *db_path*
+    only applies to the SQLite fallback.
     """
     url = _database_url()
     if url is not None:
+        connect_args: dict = {}
+        if isinstance(url, URL):
+            # pg8000 doesn't understand libpq's ``sslmode`` / ``channel_binding``
+            # query params (those are psycopg2/libpq concepts). A managed
+            # Postgres such as Neon requires TLS and ships URLs with
+            # ``?sslmode=require``: translate an SSL-requiring mode into an
+            # ``ssl_context`` connect arg, then strip the libpq-only params so
+            # ``pg8000.connect()`` doesn't reject them. The Cloud SQL Unix-socket
+            # URL carries neither param, so it stays plaintext over the socket.
+            if url.query.get("sslmode") not in (None, "disable", "allow"):
+                connect_args["ssl_context"] = ssl.create_default_context()
+            url = url.difference_update_query(["sslmode", "channel_binding"])
         engine = create_engine(
             url,
             echo=echo,
-            # Verify connections before use (Cloud SQL drops idle ones) and
-            # recycle before Cloud SQL's ~real idle timeout. Keep the pool small
-            # since Cloud Run fans out across instances, not threads.
+            connect_args=connect_args,
+            # Verify connections before use (managed Postgres drops idle ones —
+            # Neon autosuspends) and recycle before that idle timeout. Keep the
+            # pool small since Cloud Run fans out across instances, not threads.
             pool_pre_ping=True,
             pool_recycle=1800,
             pool_size=5,
