@@ -249,12 +249,79 @@ breakdown with a button per player that drills into that player's detail.
 | Value history | `data/value_history.db` | One snapshot per day, written on first app load |
 | Local cache | `data/dtf.db` | SQLModel cache of all Sleeper + Parse responses to cut API calls |
 
-## Local cache & refresh
+## Cache, refresh & the data store
 
-To keep API usage low, every Sleeper and Parse response is cached in a local
-SQLite database (`data/dtf.db`, via SQLModel). Data is reused indefinitely —
-a cold start after the first load makes **zero** API calls — and is only
-re-fetched when you click **🔄 Values** or **🔄 League** in the sidebar, which
-also shows how long ago each was cached. Your value-model weights and
-trade-finder options are persisted per Sleeper username and restored on your
-next visit.
+To keep API usage low, every Sleeper and Parse response is cached in the
+store (via SQLModel). Data is reused indefinitely — a cold start after the
+first load makes **zero** API calls — and is only re-fetched when you click
+**🔄 Values** or **🔄 League** in the sidebar, which also shows how long ago
+each was cached. Your value-model weights and trade-finder options are
+persisted per Sleeper username and restored on your next visit.
+
+The store backend is chosen from the environment (`src/db/engine.py`):
+
+| Environment | Backend |
+|-------------|---------|
+| nothing set | SQLite file at `data/dtf.db` (local dev, tests) |
+| `DATABASE_URL` | that SQLAlchemy URL (any managed Postgres) |
+| `INSTANCE_CONNECTION_NAME` + `DB_USER` / `DB_PASS` / `DB_NAME` | Cloud SQL for PostgreSQL over the Cloud Run Unix socket |
+
+A single SQLite file is fine locally, but on Cloud Run the container
+filesystem is in-memory and per-instance, so it resets on every cold start
+and isn't shared across instances. Deployments therefore use **Cloud SQL for
+PostgreSQL** as a durable, shared store — see below.
+
+## Deploying to Google Cloud
+
+Both workflows (`.github/workflows/deploy.yml` for prod on `main`,
+`deploy-staging.yml` for PR previews) build the image, push to Artifact
+Registry, and deploy to Cloud Run. API keys come from Secret Manager
+(`parse-api-key`, `sportsdata-api-key`) and the app is public
+(`--allow-unauthenticated`). Streamlit runs behind Cloud Run with
+`--session-affinity` and CORS/XSRF disabled (`.streamlit/config.toml`) so its
+websocket stays connected.
+
+### One-time Cloud SQL setup
+
+The workflows connect to Cloud SQL only when the **`CLOUD_SQL_INSTANCE`** repo
+variable is set; until then they deploy with the SQLite fallback. Provision
+once from [Cloud Shell](https://shell.cloud.google.com) (values below assume
+project `dynasty-trade-finder`, region `us-east1`):
+
+```bash
+# 1. Enable the API and create the smallest instance (Enterprise, shared core).
+gcloud services enable sqladmin.googleapis.com --project=dynasty-trade-finder
+gcloud sql instances create dtf-db \
+  --database-version=POSTGRES_16 --edition=enterprise \
+  --tier=db-f1-micro --region=us-east1 --project=dynasty-trade-finder
+
+# 2. Create the database and a user; store the password in Secret Manager.
+gcloud sql databases create dtf --instance=dtf-db --project=dynasty-trade-finder
+DB_PASS="$(openssl rand -base64 24)"
+gcloud sql users create dtf --instance=dtf-db --password="$DB_PASS" --project=dynasty-trade-finder
+printf '%s' "$DB_PASS" | gcloud secrets create db-password --data-file=- \
+  --replication-policy=automatic --project=dynasty-trade-finder
+
+# 3. Let the Cloud Run runtime SA read the password and connect to Cloud SQL.
+RUNTIME_SA="1082242810099-compute@developer.gserviceaccount.com"
+gcloud secrets add-iam-policy-binding db-password \
+  --member="serviceAccount:$RUNTIME_SA" \
+  --role="roles/secretmanager.secretAccessor" --project=dynasty-trade-finder
+gcloud projects add-iam-policy-binding dynasty-trade-finder \
+  --member="serviceAccount:$RUNTIME_SA" --role="roles/cloudsql.client"
+# The deployer SA also needs cloudsql.client so --add-cloudsql-instances validates.
+gcloud projects add-iam-policy-binding dynasty-trade-finder \
+  --member="serviceAccount:github-deployer@dynasty-trade-finder.iam.gserviceaccount.com" \
+  --role="roles/cloudsql.client"
+```
+
+Then set the repo variable to the instance connection name
+(`PROJECT:REGION:INSTANCE`) so the next deploy wires everything up:
+
+```bash
+gh variable set CLOUD_SQL_INSTANCE --body "dynasty-trade-finder:us-east1:dtf-db"
+```
+
+The next deploy mounts the socket at `/cloudsql/<connection-name>` and the app
+connects as user/database `dtf`. To roll back to SQLite, unset the variable
+(`gh variable delete CLOUD_SQL_INSTANCE`).
