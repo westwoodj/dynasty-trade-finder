@@ -62,6 +62,14 @@ jobs:
           secrets: |
             PARSE_API_KEY=parse-api-key:latest
             SPORTSDATA_API_KEY=sportsdata-api-key:latest
+          # session-affinity keeps a browser pinned to one instance so Streamlit's
+          # websocket stays put; the memory bump avoids OOM while loading the NFL
+          # player list + nflverse stats; 3600s timeout keeps long sockets open.
+          flags: >-
+            --memory=2Gi
+            --cpu=1
+            --timeout=3600
+            --session-affinity
 
       # The deploy-cloudrun action does not grant public access, so anonymous
       # requests to the preview URL get a 403. Grant allUsers the invoker role

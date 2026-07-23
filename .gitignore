@@ -217,11 +217,18 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Parse SDK - generated payload is per-key (reveals your API inventory).
-# Ignore everything under the generated package; keep only the committed scaffold.
+# Parse SDK - generated typed clients.
+# Vendored (committed) so the Docker image built in CI — which only sees
+# git-tracked files via actions/checkout — actually ships them; without the
+# generated *_api packages every provider raises ProviderUnavailableError and
+# the deployed app shows no player values. The API inventory is already
+# declared in pyproject.toml [[tool.parse.marketplace]], so committing the
+# clients leaks nothing new. Loose per-key artifacts stay ignored.
 parse_apis/src/parse_apis/*
 !parse_apis/src/parse_apis/__init__.py
 !parse_apis/src/parse_apis/py.typed
+!parse_apis/src/parse_apis/_manifest.json
+!parse_apis/src/parse_apis/*_api/
 .parse/
 
 # Dynasty Trade Finder local value-history database
