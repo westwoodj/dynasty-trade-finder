@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-import pandas as pd
+import polars as pl
 import streamlit as st
 
 from ..player_detail import PlayerDetail
@@ -121,10 +121,13 @@ def _render_value(detail: PlayerDetail) -> None:
         st.info("No market value sources for this player.")
         return
     st.markdown("**Value by source** (0–100, per source)")
-    df = pd.DataFrame(
-        {"value": {src: round(v, 1) for src, v in detail.values_by_source.items()}}
+    df = pl.DataFrame(
+        {
+            "source": list(detail.values_by_source.keys()),
+            "value": [round(v, 1) for v in detail.values_by_source.values()],
+        }
     )
-    st.bar_chart(df)
+    st.bar_chart(df, x="source", y="value")
 
     if detail.high_source and detail.low_source:
         st.caption(
@@ -169,18 +172,17 @@ def _render_performance(
 def _render_weekly_chart(weekly: list[dict], perf) -> None:
     if not weekly:
         return
-    df = pd.DataFrame(weekly)
+    df = pl.DataFrame(weekly)
     if "player_id" in df.columns and perf.gsis_id:
-        sub = df[df["player_id"] == perf.gsis_id]
+        sub = df.filter(pl.col("player_id") == perf.gsis_id)
     elif "player_display_name" in df.columns:
-        sub = df[df["player_display_name"] == perf.name]
+        sub = df.filter(pl.col("player_display_name") == perf.name)
     else:
         return
-    if sub.empty or "week" not in sub.columns or "fantasy_points_ppr" not in sub.columns:
+    if sub.is_empty() or "week" not in sub.columns or "fantasy_points_ppr" not in sub.columns:
         return
-    chart = sub.sort_values("week")[["week", "fantasy_points_ppr"]].set_index("week")
     st.markdown("**Weekly fantasy points (PPR)**")
-    st.line_chart(chart, y="fantasy_points_ppr")
+    st.line_chart(sub.sort("week"), x="week", y="fantasy_points_ppr")
 
 
 def _render_trends(
@@ -195,7 +197,7 @@ def _render_trends(
     local = fetch_local_history(detail.value_key) if detail.value_key else []
     if local:
         frames.append(
-            pd.DataFrame(local, columns=["date", "Local snapshots"]).set_index("date")
+            pl.DataFrame(local, schema=["date", "Local snapshots"], orient="row")
         )
     if detail.fc_player_id:
         try:
@@ -204,16 +206,25 @@ def _render_trends(
             market = []
             st.caption(f"FantasyCalc history unavailable: {exc}")
         if market:
-            df = pd.DataFrame(market, columns=["date", "FantasyCalc value"]).set_index(
-                "date"
+            df = pl.DataFrame(
+                market, schema=["date", "FantasyCalc value"], orient="row"
             )
             peak = df["FantasyCalc value"].max()
-            if peak > 0:  # rescale raw series to the 0–100 display scale
-                df["FantasyCalc value"] = df["FantasyCalc value"] / peak * 100.0
+            if peak and peak > 0:  # rescale raw series to the 0–100 display scale
+                df = df.with_columns(
+                    (pl.col("FantasyCalc value") / peak * 100.0).alias(
+                        "FantasyCalc value"
+                    )
+                )
             frames.append(df)
 
     if frames:
-        st.line_chart(pd.concat(frames, axis=1).sort_index())
+        # Polars has no index: outer-join the series on the shared "date" column
+        # (they can cover different date ranges) and drive the x-axis explicitly.
+        chart = frames[0]
+        for extra in frames[1:]:
+            chart = chart.join(extra, on="date", how="full", coalesce=True)
+        st.line_chart(chart.sort("date"), x="date")
     else:
         st.info(
             "No value history yet — local snapshots build up daily, and "

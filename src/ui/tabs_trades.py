@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-import pandas as pd
+import polars as pl
 import streamlit as st
 
 from ..insights import TeamProfile, timeline_fit_bonus
@@ -86,8 +86,8 @@ def _render_roster_picker(
                 "Player": asset.display_name,
                 "Pos": asset.position,
                 "Team": asset.team or "—",
-                # Picks carry no age; keep the column all-string so Arrow doesn't
-                # choke on a mix of numbers and the "—" placeholder.
+                # Picks carry no age; keep the column all-string so neither Arrow
+                # nor polars chokes on a mix of numbers and the "—" placeholder.
                 "Age": str(int(asset.age)) if asset.age else "—",
                 "Base": round(valuation.base_value, 1)
                 if valuation
@@ -101,7 +101,7 @@ def _render_roster_picker(
         st.caption("No assets match the position filter.")
         return
 
-    idx = select_table_row(pd.DataFrame(rows), key=key)
+    idx = select_table_row(pl.DataFrame(rows), key=key)
     if idx is not None and 0 <= idx < len(labels):
         st.session_state["_te_pending"] = (side_key, labels[idx])
         st.rerun()
@@ -350,7 +350,9 @@ def render_best_trades(
         return
 
     st.caption("💡 Click a trade row to break it down and inspect each player.")
-    idx = select_table_row(pd.DataFrame(rows), key="best_trades_table")
+    # Rows optionally include a "Their Grade" key; ≤25 rows means polars' default
+    # schema inference scans them all and unions the keys.
+    idx = select_table_row(pl.DataFrame(rows), key="best_trades_table")
     if idx is not None and 0 <= idx < len(shown):
         _open_trade_breakdown(shown[idx])
 

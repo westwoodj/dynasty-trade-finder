@@ -1,12 +1,12 @@
 """Tests for the nflverse performance source (no network).
 
-nflreadpy loaders are monkeypatched to return canned frames wrapped so their
-``.to_pandas()`` boundary behaves like the real polars frames.
+nflreadpy loaders are monkeypatched to return canned **polars** frames — the
+same type the real loaders return — which ``nfl_stats`` consumes natively.
 """
 
 from __future__ import annotations
 
-import pandas as pd
+import polars as pl
 import pytest
 
 from src import nfl_stats
@@ -17,19 +17,9 @@ from src.nfl_stats import (
 )
 
 
-class _PolarsLike:
-    """Stand-in for a polars frame: exposes ``.to_pandas()``."""
-
-    def __init__(self, pdf: pd.DataFrame):
-        self._pdf = pdf
-
-    def to_pandas(self) -> pd.DataFrame:
-        return self._pdf
-
-
 @pytest.fixture
 def fake_nflverse(monkeypatch):
-    stats = pd.DataFrame(
+    stats = pl.DataFrame(
         [
             {
                 "player_id": "00-0036322", "player_display_name": "Justin Jefferson",
@@ -42,14 +32,14 @@ def fake_nflverse(monkeypatch):
             },
         ]
     )
-    crosswalk = pd.DataFrame(
+    crosswalk = pl.DataFrame(
         [{"gsis_id": "00-0036322", "sleeper_id": 6794.0, "fantasy_data_id": 21685.0}]
     )
     monkeypatch.setattr(
-        nfl_stats.nfl, "load_player_stats", lambda *a, **k: _PolarsLike(stats)
+        nfl_stats.nfl, "load_player_stats", lambda *a, **k: stats
     )
     monkeypatch.setattr(
-        nfl_stats.nfl, "load_ff_playerids", lambda *a, **k: _PolarsLike(crosswalk)
+        nfl_stats.nfl, "load_ff_playerids", lambda *a, **k: crosswalk
     )
 
 

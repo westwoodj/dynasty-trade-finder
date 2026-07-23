@@ -5,10 +5,9 @@ provides season and weekly stats plus the ffverse ID crosswalk, and is used
 both to populate the Performance tab and to validate/correct the scrambled
 SportsDataIO stats (see :mod:`src.stat_validation`).
 
-nflreadpy returns **polars** DataFrames; every public function here converts to
-pandas at the boundary so the rest of the app stays pandas-only.  nflreadpy
-caches downloads to disk itself — pointed at ``data/nflreadpy`` below — so
-repeated loads in a session are cheap.
+nflreadpy returns **polars** DataFrames and this module works with them natively
+(no pandas boundary).  nflreadpy caches downloads to disk itself — pointed at
+``data/nflreadpy`` below — so repeated loads in a session are cheap.
 """
 
 from __future__ import annotations
@@ -135,12 +134,12 @@ def current_season() -> int:
 def _crosswalk_by_gsis() -> dict[str, dict]:
     """gsis_id -> {sleeper_id, fantasy_data_id} from the ffverse crosswalk."""
     try:
-        xw = nfl.load_ff_playerids().to_pandas()
+        xw = nfl.load_ff_playerids()
     except Exception as err:  # pragma: no cover - network/parse guard
         logger.warning("Could not load ffverse crosswalk: %s", err)
         return {}
     out: dict[str, dict] = {}
-    for row in xw.to_dict("records"):
+    for row in xw.to_dicts():
         gsis = row.get("gsis_id")
         if not gsis:
             continue
@@ -157,17 +156,17 @@ def fetch_season_stats(season: int) -> list[PlayerPerformance]:
     Falls back to the prior season once when *season* has no data yet (e.g.
     the current season before Week 1), so the app always shows something.
     """
-    df = nfl.load_player_stats(season, summary_level="reg").to_pandas()
-    if df.empty and season > 1999:
+    df = nfl.load_player_stats(season, summary_level="reg")
+    if df.is_empty() and season > 1999:
         logger.info("No %s regular-season stats yet; falling back to %s", season, season - 1)
         season -= 1
-        df = nfl.load_player_stats(season, summary_level="reg").to_pandas()
-    if df.empty:
+        df = nfl.load_player_stats(season, summary_level="reg")
+    if df.is_empty():
         return []
 
     crosswalk = _crosswalk_by_gsis()
     out: list[PlayerPerformance] = []
-    for row in df.to_dict("records"):
+    for row in df.to_dicts():
         gsis = str(row.get("player_id") or "")
         xref = crosswalk.get(gsis, {})
         stats = {col: _f(row.get(col)) for col in _STAT_COLUMNS}
@@ -224,11 +223,11 @@ def _assign(signals: dict[str, float], player: PlayerPerformance, value: float) 
 
 def fetch_weekly_stats(season: int) -> list[dict]:
     """Trimmed per-week fantasy production for *season* (for the weekly view)."""
-    df = nfl.load_player_stats(season, summary_level="week").to_pandas()
-    if df.empty and season > 1999:
+    df = nfl.load_player_stats(season, summary_level="week")
+    if df.is_empty() and season > 1999:
         season -= 1
-        df = nfl.load_player_stats(season, summary_level="week").to_pandas()
-    if df.empty:
+        df = nfl.load_player_stats(season, summary_level="week")
+    if df.is_empty():
         return []
     keep = [
         "player_id", "player_display_name", "position", "recent_team", "week",
@@ -236,4 +235,4 @@ def fetch_weekly_stats(season: int) -> list[dict]:
         "receiving_yards", "rushing_yards", "passing_yards",
     ]
     cols = [c for c in keep if c in df.columns]
-    return df[cols].to_dict("records")
+    return df.select(cols).to_dicts()

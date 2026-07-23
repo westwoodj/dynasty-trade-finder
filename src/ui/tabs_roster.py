@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-import pandas as pd
+import polars as pl
 import streamlit as st
 
 from ..trade_calculator import TradeAsset
@@ -41,7 +41,9 @@ def render_my_roster(
                     "Player": asset.name,
                     "Pos": asset.position,
                     "Team": asset.team,
-                    "Age": asset.age or "—",
+                    # Keep the column single-typed (str) — polars won't build a
+                    # column that mixes an int age with the "—" placeholder.
+                    "Age": str(int(asset.age)) if asset.age else "—",
                     "Base": round(valuation.base_value, 1) if valuation else 0.0,
                     "Value": round(asset.value, 1),
                     "Adjustments": format_components(valuation),
@@ -56,7 +58,7 @@ def render_my_roster(
             )
         st.caption("💡 Click a player's row for full detail.")
         ref = select_player_from_table(
-            pd.DataFrame(rows), row_keys, key="roster_table"
+            pl.DataFrame(rows), row_keys, key="roster_table"
         )
         if ref and on_select_player:
             on_select_player(ref)
@@ -68,7 +70,7 @@ def render_my_roster(
                 for p in sorted(my_picks, key=lambda x: x.value, reverse=True)
             ]
             st.dataframe(
-                pd.DataFrame(pick_rows), use_container_width=True, hide_index=True
+                pl.DataFrame(pick_rows), use_container_width=True, hide_index=True
             )
 
     with col2:

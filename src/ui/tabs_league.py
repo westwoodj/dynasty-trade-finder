@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import pandas as pd
+import polars as pl
 import streamlit as st
 
 from ..insights import TeamProfile
@@ -56,7 +56,7 @@ def render_league_overview(
         st.info("No rosters found.")
         return
 
-    df = pd.DataFrame(rows).sort_values("Total Value", ascending=False)
+    df = pl.DataFrame(rows).sort("Total Value", descending=True)
     st.dataframe(df, use_container_width=True, hide_index=True)
 
     st.subheader("Competitive timelines")
@@ -65,7 +65,7 @@ def render_league_overview(
         "Contenders should be trading with rebuilders — vets flow one way, "
         "youth and picks the other."
     )
-    scatter_df = pd.DataFrame(
+    scatter_df = pl.DataFrame(
         {
             "Team": [p.team_name for p in profiles.values()],
             "Win-Now Value": [p.win_now_value for p in profiles.values()],

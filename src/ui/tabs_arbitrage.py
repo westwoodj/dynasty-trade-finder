@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-import pandas as pd
+import polars as pl
 import streamlit as st
 
 from ..data_providers import NormalizedPlayerValue
@@ -87,6 +87,11 @@ def render_arbitrage(
         return
 
     st.caption("💡 Click a player's row for full detail.")
-    ref = select_player_from_table(pd.DataFrame(rows), row_keys, key="arb_table")
+    # Rows carry a dynamic set of "<source> value" columns; infer_schema_length=None
+    # makes polars scan every row so a source that only appears later still gets a
+    # column (matching pandas' union-of-keys behaviour).
+    ref = select_player_from_table(
+        pl.DataFrame(rows, infer_schema_length=None), row_keys, key="arb_table"
+    )
     if ref and on_select_player:
         on_select_player(ref)
