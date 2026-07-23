@@ -49,6 +49,15 @@ wheels = [
 ]
 
 [[package]]
+name = "asn1crypto"
+version = "1.5.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/de/cf/d547feed25b5244fcb9392e288ff9fdc3280b10260362fc45d37a798a6ee/asn1crypto-1.5.1.tar.gz", hash = "sha256:13ae38502be632115abf8a24cbe5f4da52e3b5231990aff31123c805306ccb9c", size = 121080, upload-time = "2022-03-15T14:46:52.889Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c9/7f/09065fd9e27da0eda08b4d6897f1c13535066174cc023af248fc2a8d5e5a/asn1crypto-1.5.1-py2.py3-none-any.whl", hash = "sha256:db4e40728b728508912cbb3d44f19ce188f218e9eba635821bb4b68564f8fd67", size = 105045, upload-time = "2022-03-15T14:46:51.055Z" },
+]
+
+[[package]]
 name = "attrs"
 version = "26.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -163,9 +172,10 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "nflreadpy" },
-    { name = "pandas" },
     { name = "parse-apis" },
     { name = "parse-sdk" },
+    { name = "pg8000" },
+    { name = "polars" },
     { name = "python-dotenv" },
     { name = "requests" },
     { name = "sqlmodel" },
@@ -181,9 +191,10 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "nflreadpy", specifier = ">=0.1.5" },
-    { name = "pandas", specifier = ">=3.0.3" },
     { name = "parse-apis", editable = "parse_apis" },
     { name = "parse-sdk", specifier = ">=0.2.0" },
+    { name = "pg8000", specifier = ">=1.31" },
+    { name = "polars", specifier = ">=1.43.0" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "requests", specifier = ">=2.34.2" },
     { name = "sqlmodel", specifier = ">=0.0.39" },
@@ -637,6 +648,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/28/f6/5fdc429f13e0c3f60e665ab6d29f566ae6ce2a7c4033d306d6309d24e05f/parse_sdk-0.2.0.tar.gz", hash = "sha256:8ce0f8dee9e4ae82897ace1ed38484f07ef3ba00c32ada5fdd2dca7cb87c8974", size = 206532, upload-time = "2026-07-16T22:08:52.565Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e5/66/3fc770f3aaff058cb5e9c635f0f25ec2e80a7f0400d2febdbef0c73b5090/parse_sdk-0.2.0-py3-none-any.whl", hash = "sha256:83e7d938cdd5a4f2f4a5c890b73a75dfa6c08619a8262a23d64acd9b08e1e330", size = 219267, upload-time = "2026-07-16T22:08:50.87Z" },
+]
+
+[[package]]
+name = "pg8000"
+version = "1.31.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "python-dateutil" },
+    { name = "scramp" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c8/9a/077ab21e700051e03d8c5232b6bcb9a1a4d4b6242c9a0226df2cfa306414/pg8000-1.31.5.tar.gz", hash = "sha256:46ebb03be52b7a77c03c725c79da2ca281d6e8f59577ca66b17c9009618cae78", size = 118933, upload-time = "2025-09-14T09:16:49.748Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/45/07/5fd183858dff4d24840f07fc845f213cd371a19958558607ba22035dadd7/pg8000-1.31.5-py3-none-any.whl", hash = "sha256:0af2c1926b153307639868d2ee5cef6cd3a7d07448e12736989b10e1d491e201", size = 57816, upload-time = "2025-09-14T09:16:47.798Z" },
 ]
 
 [[package]]
@@ -1121,6 +1145,18 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/8b/71/14edf065f04630b1a8472f7653cad03f6c478bcf95ea0e6aed55451e33ea/rpds_py-2026.6.3-cp315-cp315t-musllinux_1_2_x86_64.whl", hash = "sha256:23a439f31ccbeff1574e24889128821d1f7917470e830cf6544dced1c662262a", size = 576533, upload-time = "2026-06-30T07:17:28.546Z" },
     { url = "https://files.pythonhosted.org/packages/ba/76/65002b08596c389105720a8c0d22298b8dc25a4baf89b2ce431343c8b1de/rpds_py-2026.6.3-cp315-cp315t-win32.whl", hash = "sha256:913ca42ccad3f8cc6e292b587ae8ae49c8c823e5dce51a736252fc7c7cdfa577", size = 201204, upload-time = "2026-06-30T07:17:30.193Z" },
     { url = "https://files.pythonhosted.org/packages/8c/97/d855d6b3c322d1f27e26f5241c42016b56cf01377ea8ed348285f54652f0/rpds_py-2026.6.3-cp315-cp315t-win_amd64.whl", hash = "sha256:ae3d4fe8c0b9213624fdce7279d70e3b148b682ca20719ebd193a23ebfa47324", size = 220719, upload-time = "2026-06-30T07:17:31.788Z" },
+]
+
+[[package]]
+name = "scramp"
+version = "1.4.12"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "asn1crypto" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/1a/0c/a7a7f217b83cb7439abe2189e0a65b648a81f1b72d6cd2a80161b74c1bae/scramp-1.4.12.tar.gz", hash = "sha256:94b38decf26005b835050d06541a5aefb9914497f4de789c6d82a0abc4b934de", size = 19179, upload-time = "2026-07-05T10:30:54.791Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3b/9c/23bbbe3202c61e5b03708967014c51ea69972ddfbcd73fa2c5c0211f16a7/scramp-1.4.12-py3-none-any.whl", hash = "sha256:6adb2828c5d64bd7785a6878eed30f66ce0fae60bf5fc07c26ce1f521db3ec3e", size = 14361, upload-time = "2026-07-05T10:30:53.177Z" },
 ]
 
 [[package]]

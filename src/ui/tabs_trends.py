@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-import pandas as pd
+import polars as pl
 import streamlit as st
 
 from ..insights import Insight
@@ -43,7 +43,8 @@ def render_trends(
                 "Signal": _KIND_BADGES.get(i.kind, i.kind),
                 "Player": i.player.name,
                 "Pos": i.player.position,
-                "Age": i.player.age or "—",
+                # Single-typed (str) so polars won't choke on int-age + "—" mix.
+                "Age": str(int(i.player.age)) if i.player.age else "—",
                 "Value": round(i.player.adjusted_value, 1),
                 "Why": i.reason,
             }
@@ -58,7 +59,7 @@ def render_trends(
             for i in insights
         ]
         ref = select_player_from_table(
-            pd.DataFrame(rows), keys, key="trends_insights"
+            pl.DataFrame(rows), keys, key="trends_insights"
         )
         if ref and on_select_player:
             on_select_player(ref)
@@ -77,7 +78,7 @@ def render_trends(
         with col1:
             st.markdown("**📈 Risers**")
             ref = select_player_from_table(
-                pd.DataFrame(
+                pl.DataFrame(
                     [
                         {
                             "Player": v.name,
@@ -99,7 +100,7 @@ def render_trends(
         with col2:
             st.markdown("**📉 Fallers**")
             ref = select_player_from_table(
-                pd.DataFrame(
+                pl.DataFrame(
                     [
                         {
                             "Player": v.name,
@@ -140,7 +141,7 @@ def render_trends(
     local = store.get_history(valuation.key)
     if local:
         frames.append(
-            pd.DataFrame(local, columns=["date", "Local snapshots"]).set_index("date")
+            pl.DataFrame(local, schema=["date", "Local snapshots"], orient="row")
         )
     if fetch_history is not None and valuation.fc_player_id:
         try:
@@ -149,17 +150,26 @@ def render_trends(
             market = []
             st.caption(f"FantasyCalc history unavailable: {exc}")
         if market:
-            df = pd.DataFrame(market, columns=["date", "FantasyCalc value"])
-            df = df.set_index("date")
+            df = pl.DataFrame(
+                market, schema=["date", "FantasyCalc value"], orient="row"
+            )
             # Rescale the raw FantasyCalc series to the 0–100 display scale
             peak = df["FantasyCalc value"].max()
-            if peak > 0:
-                df["FantasyCalc value"] = df["FantasyCalc value"] / peak * 100.0
+            if peak and peak > 0:
+                df = df.with_columns(
+                    (pl.col("FantasyCalc value") / peak * 100.0).alias(
+                        "FantasyCalc value"
+                    )
+                )
             frames.append(df)
 
     if frames:
-        chart_df = pd.concat(frames, axis=1).sort_index()
-        st.line_chart(chart_df)
+        # Polars has no index: outer-join the series on the shared "date" column
+        # (they can cover different date ranges) and drive the x-axis explicitly.
+        chart_df = frames[0]
+        for extra in frames[1:]:
+            chart_df = chart_df.join(extra, on="date", how="full", coalesce=True)
+        st.line_chart(chart_df.sort("date"), x="date")
         n_local = len(local)
         st.caption(
             f"Local snapshots accumulate each day you open the app "

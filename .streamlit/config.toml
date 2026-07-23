@@ -1,2 +1,17 @@
 [server]
+# Rerun on file save (dev convenience; a no-op in the immutable container).
 runOnSave = true
+headless = true
+# Streamlit's realtime websocket lives at /_stcore/stream. Behind Cloud Run's
+# proxy the default CORS/XSRF origin checks reject it (the served origin is a
+# *.run.app host, not in Streamlit's default allowedOrigins), which makes the
+# socket close-and-reconnect forever — the app appears to "load in perpetuity".
+# Disabling them lets the same-origin socket through. Safe here: the app is
+# read-only market analysis with no authenticated/mutating actions to forge.
+enableCORS = false
+enableXsrfProtection = false
+# Some proxies mishandle permessage-deflate; disable to avoid frame errors.
+enableWebsocketCompression = false
+
+[browser]
+gatherUsageStats = false

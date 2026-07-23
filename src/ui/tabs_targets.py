@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-import pandas as pd
+import polars as pl
 import streamlit as st
 
 from ..name_matching import normalize_name
@@ -64,7 +64,8 @@ def render_trade_targets(
                 "Player": asset.name,
                 "Pos": asset.position,
                 "NFL": asset.team,
-                "Age": asset.age or "—",
+                # Single-typed (str) so polars won't choke on int-age + "—" mix.
+                "Age": str(int(asset.age)) if asset.age else "—",
                 "Owner": team_name,
                 "Value": round(player_values.get(asset.name, asset.value), 1),
                 "Fit Score": round(score, 1),
@@ -87,7 +88,7 @@ def render_trade_targets(
 
     st.caption("💡 Click a player's row for full detail.")
     ref = select_player_from_table(
-        pd.DataFrame(rows), row_keys, key="targets_table"
+        pl.DataFrame(rows), row_keys, key="targets_table"
     )
     if ref and on_select_player:
         on_select_player(ref)

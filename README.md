@@ -249,12 +249,84 @@ breakdown with a button per player that drills into that player's detail.
 | Value history | `data/value_history.db` | One snapshot per day, written on first app load |
 | Local cache | `data/dtf.db` | SQLModel cache of all Sleeper + Parse responses to cut API calls |
 
-## Local cache & refresh
+## Cache, refresh & the data store
 
-To keep API usage low, every Sleeper and Parse response is cached in a local
-SQLite database (`data/dtf.db`, via SQLModel). Data is reused indefinitely —
-a cold start after the first load makes **zero** API calls — and is only
-re-fetched when you click **🔄 Values** or **🔄 League** in the sidebar, which
-also shows how long ago each was cached. Your value-model weights and
-trade-finder options are persisted per Sleeper username and restored on your
-next visit.
+To keep API usage low, every Sleeper and Parse response is cached in the
+store (via SQLModel). Data is reused indefinitely — a cold start after the
+first load makes **zero** API calls — and is only re-fetched when you click
+**🔄 Values** or **🔄 League** in the sidebar, which also shows how long ago
+each was cached. Your value-model weights and trade-finder options are
+persisted per Sleeper username and restored on your next visit.
+
+The store backend is chosen from the environment (`src/db/engine.py`):
+
+| Environment | Backend |
+|-------------|---------|
+| nothing set | SQLite file at `data/dtf.db` (local dev, tests) |
+| `DATABASE_URL` | that SQLAlchemy URL — **Neon serverless Postgres** in production, or any managed Postgres (a TLS `?sslmode=require` is translated to a pg8000 `ssl_context`) |
+| `INSTANCE_CONNECTION_NAME` + `DB_USER` / `DB_PASS` / `DB_NAME` | Cloud SQL for PostgreSQL over the Cloud Run Unix socket (still supported; no longer the default) |
+
+A single SQLite file is fine locally, but on Cloud Run the container
+filesystem is in-memory and per-instance, so it resets on every cold start
+and isn't shared across instances. Deployments therefore use **Neon serverless
+Postgres** as a durable, shared store: it scales to zero (no always-on instance
+cost), and the app touches it rarely thanks to cache-until-refresh — see below.
+
+## Deploying to Google Cloud
+
+Both workflows (`.github/workflows/deploy.yml` for prod on `main`,
+`deploy-staging.yml` for PR previews) build the image, push to Artifact
+Registry, and deploy to Cloud Run. API keys come from Secret Manager
+(`parse-api-key`, `sportsdata-api-key`) and the app is public
+(`--allow-unauthenticated`). Streamlit runs behind Cloud Run with
+`--session-affinity` and CORS/XSRF disabled (`.streamlit/config.toml`) so its
+websocket stays connected.
+
+### One-time database setup (Neon)
+
+The workflows connect to a managed Postgres only when the
+**`DATABASE_URL_SECRET`** repo variable is set — to the *name* of the Secret
+Manager secret holding the connection string; until then they deploy with the
+SQLite fallback. Set it up once:
+
+**1. Create a Neon project and database.** Sign up at
+[neon.tech](https://neon.tech), create a project (pick a region near Cloud
+Run's `us-east1`, e.g. AWS `us-east-1`), and copy the **direct** connection
+string (not the `-pooler` one) from the dashboard. It looks like:
+
+```
+postgresql://dtf:<password>@ep-cool-name-123.us-east-1.aws.neon.tech/dtf?sslmode=require
+```
+
+> Use the **direct** endpoint: the app's concurrency is tiny (`--min-instances=1`
+> plus cache-until-refresh), so it doesn't need the PgBouncer pooler — and the
+> direct endpoint avoids the pooler's prepared-statement quirks with `pg8000`.
+
+**2. Store the connection string in Secret Manager** (values assume project
+`dynasty-trade-finder`). Run from [Cloud Shell](https://shell.cloud.google.com):
+
+```bash
+gcloud services enable secretmanager.googleapis.com --project=dynasty-trade-finder
+printf '%s' 'postgresql://dtf:<password>@ep-...neon.tech/dtf?sslmode=require' \
+  | gcloud secrets create database-url --data-file=- \
+    --replication-policy=automatic --project=dynasty-trade-finder
+
+# Let the Cloud Run runtime SA read it.
+RUNTIME_SA="1082242810099-compute@developer.gserviceaccount.com"
+gcloud secrets add-iam-policy-binding database-url \
+  --member="serviceAccount:$RUNTIME_SA" \
+  --role="roles/secretmanager.secretAccessor" --project=dynasty-trade-finder
+```
+
+**3. Point the deploy at it** by setting the repo variable to the secret name:
+
+```bash
+gh variable set DATABASE_URL_SECRET --body "database-url"
+```
+
+The next deploy injects `DATABASE_URL` from that secret and the app connects to
+Neon over TLS (the schema is created automatically on first boot). To roll back
+to the ephemeral SQLite fallback, unset the variable
+(`gh variable delete DATABASE_URL_SECRET`). To rotate the connection string,
+add a new secret version
+(`gcloud secrets versions add database-url --data-file=-`).

@@ -57,14 +57,36 @@ jobs:
           docker push ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE_NAME }}:latest
 
       # Deploy to Cloud Run
+      #
+      # The managed Postgres (Neon) connection string lives in Secret Manager;
+      # wiring it is opt-in via the DATABASE_URL_SECRET repo variable
+      # (Settings > Secrets and variables > Actions > Variables), set to the
+      # secret's name (e.g. `database-url`). While it's unset the app falls back
+      # to its ephemeral SQLite file, so deploys keep working before the
+      # database is provisioned. Once set, DATABASE_URL is injected as an env
+      # var and src/db/engine.py connects to Neon over TLS. See README.
       - name: Deploy
+        env:
+          DATABASE_URL_SECRET: ${{ vars.DATABASE_URL_SECRET }}
         run: |
+          secrets="PARSE_API_KEY=parse-api-key:latest,SPORTSDATA_API_KEY=sportsdata-api-key:latest"
+          if [ -n "$DATABASE_URL_SECRET" ]; then
+            echo "Wiring managed Postgres via Secret Manager secret: $DATABASE_URL_SECRET"
+            secrets="$secrets,DATABASE_URL=$DATABASE_URL_SECRET:latest"
+          else
+            echo "DATABASE_URL_SECRET not set — deploying with the SQLite fallback."
+          fi
           gcloud run deploy ${{ env.SERVICE_NAME }} \
             --image=${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.SERVICE_NAME }}:${{ github.sha }} \
             --region=${{ env.REGION }} \
             --platform=managed \
             --allow-unauthenticated \
-            --set-secrets=PARSE_API_KEY=parse-api-key:latest,SPORTSDATA_API_KEY=sportsdata-api-key:latest
+            --memory=2Gi \
+            --cpu=1 \
+            --timeout=3600 \
+            --session-affinity \
+            --min-instances=1 \
+            --set-secrets="$secrets"
 
       # Output the service URL
       - name: Show URL

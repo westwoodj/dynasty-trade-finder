@@ -29,18 +29,22 @@ def _row_to_npv(row: m._PlayerValueRow) -> NormalizedPlayerValue:
     return NormalizedPlayerValue(**{f: getattr(row, f) for f in _NPV_FIELDS})
 
 
-def _scalar_default(col) -> Optional[str]:
+def _scalar_default(col, dialect_name: str = "sqlite") -> Optional[str]:
     """SQL literal for a column's scalar Python default, or None.
 
     Used by the additive column migration; factory/callable defaults (e.g.
-    ``utcnow``) return None so the added column is simply nullable.
+    ``utcnow``) return None so the added column is simply nullable. Booleans
+    are rendered per-dialect (``TRUE``/``FALSE`` on Postgres, ``1``/``0`` on
+    SQLite, which has no native boolean).
     """
     default = col.default
     if default is None or not getattr(default, "is_scalar", False):
         return None
     value = default.arg
-    if isinstance(value, bool):
-        return str(int(value))
+    if isinstance(value, bool):  # must precede int — bool is an int subclass
+        if dialect_name == "sqlite":
+            return "1" if value else "0"
+        return "TRUE" if value else "FALSE"
     if isinstance(value, (int, float)):
         return repr(value)
     return "'" + str(value).replace("'", "''") + "'"
@@ -75,7 +79,7 @@ class DtfStore:
                         continue
                     type_sql = col.type.compile(dialect=self.engine.dialect)
                     ddl = f'ADD COLUMN "{col.name}" {type_sql}'
-                    default = _scalar_default(col)
+                    default = _scalar_default(col, self.engine.dialect.name)
                     if default is not None:
                         ddl += f" DEFAULT {default}"
                     conn.execute(text(f'ALTER TABLE "{table.name}" {ddl}'))

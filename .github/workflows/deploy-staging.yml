@@ -59,9 +59,22 @@ jobs:
           no_traffic: ${{ steps.service-check.outputs.exists == 'true' }}
           # Inject API keys from Secret Manager as env vars (values never touch
           # this YAML or the image). config.py reads these names from os.environ.
+          # The DATABASE_URL line is only emitted when the DATABASE_URL_SECRET
+          # repo variable is set (to the Secret Manager secret name, e.g.
+          # `database-url`); until then it resolves to a blank line and the app
+          # uses its SQLite fallback.
           secrets: |
             PARSE_API_KEY=parse-api-key:latest
             SPORTSDATA_API_KEY=sportsdata-api-key:latest
+            ${{ vars.DATABASE_URL_SECRET && format('DATABASE_URL={0}:latest', vars.DATABASE_URL_SECRET) || '' }}
+          # session-affinity keeps a browser pinned to one instance so Streamlit's
+          # websocket stays put; the memory bump avoids OOM while loading the NFL
+          # player list + nflverse stats; 3600s timeout keeps long sockets open.
+          flags: >-
+            --memory=2Gi
+            --cpu=1
+            --timeout=3600
+            --session-affinity
 
       # The deploy-cloudrun action does not grant public access, so anonymous
       # requests to the preview URL get a 403. Grant allUsers the invoker role

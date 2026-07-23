@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-import pandas as pd
+import polars as pl
 import streamlit as st
 
 from .. import nfl_stats
@@ -51,7 +51,15 @@ def render_performance(
     season = st.selectbox("Season", seasons, index=default_index, key="perf_season")
 
     with st.spinner(f"Loading {season} performance data…"):
-        perf = fetch_perf(season)
+        try:
+            perf = fetch_perf(season)
+        except Exception as err:  # nflverse download failure — don't crash the app
+            # nflverse publishes a season's stats file only once games are played;
+            # until then the download 404s (and the prior-season fallback in
+            # nfl_stats only triggers on an *empty* frame, not a raise). Degrade
+            # gracefully, mirroring the main-flow guard in app.py.
+            perf = []
+            st.caption(f"nflverse fetch failed: {err}")
 
     if not perf:
         st.info(
@@ -137,34 +145,36 @@ def _render_season_table(perf: list[PlayerPerformance]) -> None:
     if not rows:
         st.info("No players at this position.")
         return
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pl.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
 def _render_weekly(weekly: list[dict]) -> None:
     if not weekly:
         st.info("No weekly data available.")
         return
-    df = pd.DataFrame(weekly)
+    df = pl.DataFrame(weekly)
     name_col = "player_display_name"
     if name_col not in df.columns or "week" not in df.columns:
         st.info("Weekly data is unavailable in the expected shape.")
         return
     # Rank players by total PPR to seed the selector with relevant names.
     totals = (
-        df.groupby(name_col)["fantasy_points_ppr"].sum().sort_values(ascending=False)
+        df.group_by(name_col)
+        .agg(pl.col("fantasy_points_ppr").sum())
+        .sort("fantasy_points_ppr", descending=True)
     )
-    names = totals.index.tolist()
+    names = totals[name_col].to_list()
     chosen = st.selectbox("Player", names, key="perf_weekly_player")
-    sub = df[df[name_col] == chosen].sort_values("week")
-    chart = sub[["week", "fantasy_points_ppr"]].set_index("week")
-    st.line_chart(chart, y="fantasy_points_ppr")
+    sub = df.filter(pl.col(name_col) == chosen).sort("week")
+    # Polars has no index, so drive the chart x-axis explicitly.
+    st.line_chart(sub, x="week", y="fantasy_points_ppr")
     show_cols = [
         c
         for c in ["week", "fantasy_points_ppr", "targets", "receptions",
                   "receiving_yards", "rushing_yards", "passing_yards"]
         if c in sub.columns
     ]
-    st.dataframe(sub[show_cols], use_container_width=True, hide_index=True)
+    st.dataframe(sub.select(show_cols), use_container_width=True, hide_index=True)
 
 
 def _render_projections(projections: list[SportsDataProjection]) -> None:
@@ -196,4 +206,4 @@ def _render_projections(projections: list[SportsDataProjection]) -> None:
                 "Proj Rec": round(pr.get("Receptions", 0.0)),
             }
         )
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.dataframe(pl.DataFrame(rows), use_container_width=True, hide_index=True)

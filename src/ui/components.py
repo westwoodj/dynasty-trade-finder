@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-import pandas as pd
+import polars as pl
 import streamlit as st
 from pydantic import BaseModel
 
@@ -161,7 +161,7 @@ class PlayerRef(BaseModel):
         return self.sleeper_id or f"name:{normalize_name(self.name)}:{self.position}"
 
 
-def select_table_row(df: "pd.DataFrame", *, key: str) -> Optional[int]:
+def select_table_row(df: "pl.DataFrame", *, key: str) -> Optional[int]:
     """Render *df* as a single-row-selectable table; return a *newly* picked row.
 
     Returns the selected row's underlying iloc position (Streamlit reports the
@@ -194,7 +194,7 @@ def select_table_row(df: "pd.DataFrame", *, key: str) -> Optional[int]:
 
 
 def select_player_from_table(
-    df: "pd.DataFrame",
+    df: "pl.DataFrame",
     row_keys: list[PlayerRef],
     *,
     key: str,
