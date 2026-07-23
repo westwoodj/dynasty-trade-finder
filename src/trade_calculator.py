@@ -40,10 +40,6 @@ class TradeAsset:
     @property
     def display_name(self) -> str:
         if self.is_pick:
-            # A named pick keeps its name — it may carry origin info that
-            # distinguishes two picks of the same year/round.
-            if self.name:
-                return self.name
             suffix = {1: "1st", 2: "2nd", 3: "3rd"}.get(
                 self.pick_round or 0, f"{self.pick_round}th"
             )
@@ -76,18 +72,6 @@ class TradeResult:
         return self.value_delta / self.giving_value
 
 
-# Grades from best to worst, for threshold comparisons.
-GRADE_ORDER: list[str] = ["A+", "A", "B+", "B", "C+", "C", "D"]
-
-
-def grade_at_least(grade: str, minimum: str) -> bool:
-    """True when *grade* is at least as good as *minimum* ("N/A" never is)."""
-    try:
-        return GRADE_ORDER.index(grade) <= GRADE_ORDER.index(minimum)
-    except ValueError:
-        return False
-
-
 # ---------------------------------------------------------------------------
 # Calculator
 # ---------------------------------------------------------------------------
@@ -117,15 +101,6 @@ class TradeCalculator:
         (-0.20, "C", "Poor — significant value loss"),
         (float("-inf"), "D", "Very unfavourable — major value loss"),
     ]
-
-    def __init__(self, multipliers: Optional[dict[str, float]] = None) -> None:
-        """
-        Args:
-            multipliers: Optional ``{position: multiplier}`` override, e.g.
-                from :func:`src.league_settings.position_multipliers`.
-                Defaults to :data:`SUPERFLEX_MULTIPLIERS`.
-        """
-        self.multipliers = multipliers or self.SUPERFLEX_MULTIPLIERS
 
     def calculate_trade_value(
         self,
@@ -208,7 +183,7 @@ class TradeCalculator:
         total = 0.0
         for asset in assets:
             val = asset.value
-            mult = self.multipliers.get(asset.position.upper(), 1.0)
+            mult = self.SUPERFLEX_MULTIPLIERS.get(asset.position.upper(), 1.0)
             val *= mult
             if positional_need:
                 need = positional_need.get(asset.position.upper(), 0)

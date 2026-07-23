@@ -97,26 +97,6 @@ class TestTotalValue:
         total = calculator._total_value([k], None)
         assert total == pytest.approx(10.0)  # Multiplier defaults to 1.0
 
-    def test_custom_multipliers_respected(self) -> None:
-        calc = TradeCalculator(multipliers={"QB": 1.0, "TE": 1.2})
-        qb = _asset("QB1", "QB", 100.0)
-        te = _asset("TE1", "TE", 100.0)
-        assert calc._total_value([qb], None) == pytest.approx(100.0)
-        assert calc._total_value([te], None) == pytest.approx(120.0)
-
-    def test_default_multipliers_unchanged(self) -> None:
-        calc = TradeCalculator()
-        assert calc.multipliers == TradeCalculator.SUPERFLEX_MULTIPLIERS
-
-    def test_pick_position_gets_default_multiplier(
-        self, calculator: TradeCalculator
-    ) -> None:
-        pick = TradeAsset(
-            name="2027 R1", position="PICK", is_pick=True,
-            pick_year=2027, pick_round=1, value=50.0,
-        )
-        assert calculator._total_value([pick], None) == pytest.approx(50.0)
-
 
 # ---------------------------------------------------------------------------
 # TradeCalculator — calculate_trade_value

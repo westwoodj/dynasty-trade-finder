@@ -35,18 +35,6 @@ jobs:
           docker build -t us-east1-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-run-images/my-app:pr-${{ github.event.number }} .
           docker push us-east1-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-run-images/my-app:pr-${{ github.event.number }}
 
-      # Check if the Cloud Run service already exists.
-      # --no-traffic is only valid when updating an existing service,
-      # not when creating one for the first time.
-      - name: Check if Cloud Run service exists
-        id: service-check
-        run: |
-          if gcloud run services describe my-app --region us-east1 --format="value(name)" 2>/dev/null; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-
       # Deploy with a revision tag for testing
       - name: Deploy to staging
         id: deploy-staging
@@ -56,7 +44,7 @@ jobs:
           image: us-east1-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-run-images/my-app:pr-${{ github.event.number }}
           region: us-east1
           tag: pr-${{ github.event.number }}
-          no_traffic: ${{ steps.service-check.outputs.exists == 'true' }}
+          no_traffic: true
 
       - name: Comment PR with preview URL
         uses: actions/github-script@v7
