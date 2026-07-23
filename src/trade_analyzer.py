@@ -13,11 +13,17 @@ This module identifies:
 
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
 from itertools import combinations
-from typing import Optional
+from typing import Callable, Optional
 
-from .trade_calculator import TradeAsset, TradeCalculator, TradeResult
+from .trade_calculator import (
+    TradeAsset,
+    TradeCalculator,
+    TradeResult,
+    grade_at_least,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -35,6 +41,7 @@ class TradeProposal:
     receiving: list[TradeAsset]
     result: TradeResult
     score: float  # Higher is better for «my_team»
+    their_grade: Optional[str] = None  # counterparty's grade when evaluated
 
 
 @dataclass
@@ -156,6 +163,13 @@ class TradeAnalyzer:
         positional_need: Optional[dict[str, int]] = None,
         max_assets_per_side: int = 2,
         top_n: int = 20,
+        counterparty_needs: Optional[dict[str, dict[str, float]]] = None,
+        min_their_grade: Optional[str] = None,
+        max_per_team: Optional[int] = None,
+        fairness_weight: float = 0.0,
+        bonus_scorer: Optional[
+            Callable[[str, tuple[TradeAsset, ...], tuple[TradeAsset, ...]], float]
+        ] = None,
     ) -> list[TradeProposal]:
         """
         Enumerate plausible trades and return the most valuable ones.
@@ -172,15 +186,33 @@ class TradeAnalyzer:
                 :meth:`TradeCalculator.calculate_positional_need`.
             max_assets_per_side: Maximum number of assets per side (1 or 2).
             top_n: How many proposals to return.
+            counterparty_needs: Optional ``{team_name: need_scores}`` used to
+                evaluate each trade from the counterparty's perspective.
+            min_their_grade: When set (e.g. ``"C+"``), drop proposals the
+                counterparty would grade worse than this — their positional
+                needs can make a value-losing trade still acceptable to them.
+            max_per_team: When set, keep at most this many proposals per
+                counterparty so the list shows variety across partners
+                instead of many near-duplicate trades against one team.
+            fairness_weight: 0..1 dial on ranking. 0 maximizes your own value
+                gain (may surface lopsided fleece-jobs); 1 maximizes mutual
+                benefit — the sum of both sides' need-adjusted gains — so
+                need-complementary trades both managers would accept rank
+                highest. Uses each team's ``counterparty_needs``.
+            bonus_scorer: Optional ``f(team_name, giving, receiving)`` hook
+                adding to a proposal's score (e.g. timeline fit).
 
         Returns:
             Top *top_n* :class:`TradeProposal` objects sorted by score.
         """
         my_assets = _enrich(my_roster, player_values)
-        proposals: list[TradeProposal] = []
+        # Each entry: (proposal, self_score, mutual_score)
+        candidates: list[tuple[TradeProposal, float, float]] = []
 
+        need_their_result = min_their_grade is not None or fairness_weight > 0
         for team_name, their_roster in all_rosters.items():
             their_assets = _enrich(their_roster, player_values)
+            their_need = (counterparty_needs or {}).get(team_name)
             for n in range(1, max_assets_per_side + 1):
                 for giving in combinations(my_assets, n):
                     for receiving in combinations(their_assets, n):
@@ -189,19 +221,57 @@ class TradeAnalyzer:
                         )
                         if not result.is_favorable:
                             continue
-                        score = self._score(result, receiving, positional_need)
-                        proposals.append(
-                            TradeProposal(
-                                my_team="My Team",
-                                their_team=team_name,
-                                giving=list(giving),
-                                receiving=list(receiving),
-                                result=result,
-                                score=score,
+                        their_grade: Optional[str] = None
+                        their_result: Optional[TradeResult] = None
+                        if need_their_result:
+                            their_result = self.calculator.calculate_trade_value(
+                                list(receiving), list(giving), their_need
+                            )
+                            their_grade = their_result.grade
+                            if min_their_grade is not None and not grade_at_least(
+                                their_grade, min_their_grade
+                            ):
+                                continue
+                        self_score = self._score(result, receiving, positional_need)
+                        if bonus_scorer is not None:
+                            self_score += bonus_scorer(team_name, giving, receiving)
+                        # Mutual benefit = the worse-off side's need-adjusted
+                        # gain; only both-win trades score positive.
+                        mutual_score = (
+                            min(result.value_delta_pct, their_result.value_delta_pct)
+                            if their_result is not None
+                            else self_score
+                        )
+                        candidates.append(
+                            (
+                                TradeProposal(
+                                    my_team="My Team",
+                                    their_team=team_name,
+                                    giving=list(giving),
+                                    receiving=list(receiving),
+                                    result=result,
+                                    score=self_score,
+                                    their_grade=their_grade,
+                                ),
+                                self_score,
+                                mutual_score,
                             )
                         )
 
-        return sorted(proposals, key=lambda p: p.score, reverse=True)[:top_n]
+        ranked = self._rank_candidates(candidates, fairness_weight)
+        if max_per_team is None:
+            return ranked[:top_n]
+
+        selected: list[TradeProposal] = []
+        per_team: dict[str, int] = {}
+        for proposal in ranked:
+            if per_team.get(proposal.their_team, 0) >= max_per_team:
+                continue
+            selected.append(proposal)
+            per_team[proposal.their_team] = per_team.get(proposal.their_team, 0) + 1
+            if len(selected) >= top_n:
+                break
+        return selected
 
     # ------------------------------------------------------------------
     # Trade target ranking
@@ -247,19 +317,72 @@ class TradeAnalyzer:
         receiving: tuple[TradeAsset, ...],
         positional_need: Optional[dict[str, int]],
     ) -> float:
-        """Compute a desirability score for a proposal (higher = better)."""
-        base = result.value_delta_pct
+        """Self-interest score for a proposal (higher = better): my
+        need-adjusted value gain plus a small bonus per need filled."""
         bonus = 0.0
         if positional_need:
             for asset in receiving:
                 need = positional_need.get(asset.position.upper(), 0)
                 bonus += need * 0.02
-        return base + bonus
+        return result.value_delta_pct + bonus
+
+    def _rank_candidates(
+        self,
+        candidates: list[tuple[TradeProposal, float, float]],
+        fairness_weight: float,
+    ) -> list[TradeProposal]:
+        """Order proposals, blending self-interest and mutual benefit.
+
+        Self-interest (my value gain) and mutual benefit (the worse-off
+        side's gain) live on very different numeric scales, so a raw linear
+        blend is swamped by self-interest.  Blending *percentile ranks*
+        within the candidate pool instead makes ``fairness_weight`` behave
+        linearly: 0.5 is a true midpoint, 0 pure self-interest, 1 pure
+        mutual benefit.  Each proposal's stored ``score`` is set to the
+        blended rank so downstream consumers see the effective ordering.
+        """
+        if not candidates:
+            return []
+        if fairness_weight <= 0:
+            ordered = sorted(candidates, key=lambda c: c[1], reverse=True)
+            return [proposal for proposal, _, _ in ordered]
+
+        self_ranks = _percentile_ranks([c[1] for c in candidates])
+        mutual_ranks = _percentile_ranks([c[2] for c in candidates])
+        scored: list[tuple[float, TradeProposal]] = []
+        for (proposal, _, _), self_pct, mutual_pct in zip(
+            candidates, self_ranks, mutual_ranks
+        ):
+            blended = (1.0 - fairness_weight) * self_pct + fairness_weight * mutual_pct
+            proposal.score = blended
+            scored.append((blended, proposal))
+        scored.sort(key=lambda s: s[0], reverse=True)
+        return [proposal for _, proposal in scored]
 
 
 # ---------------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------------
+
+
+def _percentile_ranks(values: list[float]) -> list[float]:
+    """Map each value to its percentile rank in [0, 1] (ties share a rank).
+
+    Rank-normalizing before blending puts two differently-scaled objectives
+    on common footing so a weighted average is meaningful.
+    """
+    n = len(values)
+    if n <= 1:
+        return [0.5] * n
+    order = sorted(values)
+    # For ties, use the average position of the tied block.
+    ranks: list[float] = []
+    for v in values:
+        lo = bisect_left(order, v)
+        hi = bisect_right(order, v)
+        avg_index = (lo + hi - 1) / 2.0
+        ranks.append(avg_index / (n - 1))
+    return ranks
 
 
 def _enrich(

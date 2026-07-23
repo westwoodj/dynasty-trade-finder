@@ -5,9 +5,14 @@ description = "Dynasty Superflex PPR fantasy football trade analysis tool"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "parse-apis",
     "pandas>=3.0.3",
+    "parse-sdk>=0.2.0",
     "requests>=2.34.2",
     "streamlit>=1.60.0",
+    "sqlmodel>=0.0.39",
+    "nflreadpy>=0.1.5",
+    "python-dotenv>=1.2.2",
 ]
 
 [dependency-groups]
@@ -15,3 +20,73 @@ dev = [
     "pytest>=9.1.1",
     "pytest-mock>=3.15.1",
 ]
+
+[tool.uv.sources]
+parse-apis = { path = "parse_apis", editable = true }
+
+# Managed by the parse CLI (`parse add` / `parse remove` / `parse sync`).
+# Edit `apis` to curate which of your account APIs this repo syncs;
+# an absent `apis` key means all of them.
+
+# Managed by the parse CLI (`parse add` / `parse remove` / `parse sync`).
+# Edit `apis` to curate which of your account APIs this repo syncs;
+# an absent `apis` key means all of them.
+
+# Managed by the parse CLI (`parse add` / `parse remove` / `parse sync`).
+# Edit `apis` to curate which of your account APIs this repo syncs;
+# an absent `apis` key means all of them.
+
+# Managed by the parse CLI (`parse add` / `parse remove` / `parse sync`).
+# Edit `apis` to curate which of your account APIs this repo syncs;
+# an absent `apis` key means all of them.
+
+# Managed by the parse CLI (`parse add` / `parse remove` / `parse sync`).
+# Edit `apis` to curate which of your account APIs this repo syncs;
+# an absent `apis` key means all of them.
+
+# Managed by the parse CLI (`parse add` / `parse remove` / `parse sync`).
+# Edit `apis` to curate which of your account APIs this repo syncs;
+# an absent `apis` key means all of them.
+[tool.parse]
+
+[[tool.parse.marketplace]]
+scraper_id = "1ed7c95b-0348-41fb-baa1-f5f0096b7da5"
+slug = "espn_com_api"
+version = 5
+listing_id = "ab644963-f560-41a5-941e-29db2fc4fc61"
+source_url = "https://espn.com"
+
+[[tool.parse.marketplace]]
+scraper_id = "8cbb56cd-270c-41c6-ab5b-ff713cf1ef13"
+slug = "draftsharks_com_api"
+version = 9
+listing_id = "1dcfd02c-80d3-4335-9609-5000b549d49b"
+source_url = "https://draftsharks.com"
+
+[[tool.parse.marketplace]]
+scraper_id = "68f10b93-1fc8-410d-af5c-7f1b3d6e618d"
+slug = "pro_football_reference_com_api"
+version = 9
+listing_id = "53a72bae-415f-471f-8a3c-fd2420630bee"
+source_url = "https://pro-football-reference.com"
+
+[[tool.parse.marketplace]]
+scraper_id = "5e9d9ba7-cf7a-4bb0-bc6a-1c6038981577"
+slug = "fantasycalc_com_api"
+version = 4
+listing_id = "fc0e447d-6f7d-4c87-aaa1-0f7b86797302"
+source_url = "https://fantasycalc.com"
+
+[[tool.parse.marketplace]]
+scraper_id = "52095a49-4d80-48b7-9495-40d7716e1e65"
+slug = "keeptradecut_com_api"
+version = 1
+listing_id = "b7c3ba52-2896-48b7-8cb3-883d36787c09"
+source_url = "https://keeptradecut.com/"
+
+[[tool.parse.marketplace]]
+scraper_id = "1063a484-f52f-4db5-a50f-b26705848e2f"
+slug = "spotrac_com_api"
+version = 9
+listing_id = "7994a459-31cd-4d12-a28b-5c053246f105"
+source_url = "https://spotrac.com"

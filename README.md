@@ -1,59 +1,106 @@
 # Dynasty Trade Finder
 
-A data aggregation and analysis tool that identifies **arbitrage opportunities** in Dynasty
-Superflex PPR fantasy football.
+A market-driven analytics tool that finds the **best trades** in your dynasty
+fantasy football league — blending live values from three market sources,
+adjusting for age curves and momentum, and filtering to trades the other
+manager might actually accept.
 
 ## Features
 
 | Feature | Description |
 |---------|-------------|
-| 🏈 **Sleeper sync** | Connect to any Sleeper league to pull live roster, team, and player data |
-| 📊 **Multi-source values** | Leverages the [Parse.bot](https://parse.bot) API to extract player values from KTC and FantasyCalc simultaneously |
-| 🔄 **Trade Calculator** | Grade any proposed trade A+→D with superflex PPR-aware value math |
-| ⚡ **Best Trades** | Automatically surfaces the highest-value trade proposals for your team |
-| 📈 **Arbitrage Finder** | Spots players whose value differs significantly between sources — buy low / sell high |
-| 🏟️ **League Overview** | Full roster-value leaderboard with positional depth for every manager |
+| 🏈 **Sleeper sync** | Connect any Sleeper league — rosters, records, traded draft picks, and league scoring settings |
+| ⚙️ **Format detection** | Superflex/1QB, PPR level, TE premium, and team count detected from your league and applied to values automatically |
+| 📊 **Multi-source values** | Typed [Parse](https://parse.bot) API clients pull dynasty values from **FantasyCalc**, **KeepTradeCut**, and **DraftSharks** (ADP, projections, injury risk) |
+| ⚖️ **Configurable value model** | Blend the sources with your own weights; dial in age-curve, 30-day-trend, injury-risk, and ADP-divergence adjustments |
+| 🃏 **Draft picks as assets** | Future picks valued by the original owner's projected finish (a tanking team's 1st ≈ early 1st) and tradeable everywhere |
+| 🔄 **Trade Explorer** | Build any trade — players and picks — and see the grade from **both** sides of the table |
+| ⚡ **Best Trades** | Auto-generated proposals filtered to mutually acceptable trades, boosted for contender↔rebuilder timeline fit |
+| 🎯 **Trade Targets** | Players on other rosters ranked by fit for your team |
+| 📈 **Trends** | 30-day market movers, buy-low/sell-high flags, and per-player value-history charts (local daily snapshots + FantasyCalc history) |
+| 📉 **Arbitrage Finder** | Players whose value differs sharply between sources — buy at the low market, sell at the high one |
+| 🏟️ **League Overview** | Value leaderboard with contender/rebuilder timeline profiling for every manager |
+| 🏈 **Performance data** | Realized season/weekly production from **nflverse** (nflreadpy) plus **SportsDataIO** projections, with the value model tiltable toward recent on-field production |
+| ✅ **Scramble validation** | SportsDataIO's free tier scrambles stats ±5-20%; every scrambled realized stat is corrected against nflverse, with a data-quality panel reporting what changed |
+| 🔍 **Player detail pop-up** | Click any player's row (Trade Targets, Best Trades, Arbitrage, My Roster, Trends) to open a modal with cross-source value comparison, nflverse performance, value-history trends, recent news, and who rosters them |
 
 ## Architecture
 
 ```
 dynasty-trade-finder/
-├── app.py                  # Streamlit web UI
-├── pyproject.toml
+├── app.py                    # Streamlit orchestrator: cached fetchers + main()
 ├── src/
-│   ├── sleeper_client.py   # Sleeper public REST API client
-│   ├── parse_bot_client.py # Parse.bot API client (KTC + FantasyCalc extraction)
-│   ├── trade_calculator.py # Superflex PPR trade grading engine
-│   └── trade_analyzer.py  # Best-trade finder & arbitrage detector
-└── tests/
-    ├── test_sleeper_client.py
-    ├── test_trade_calculator.py
-    └── test_trade_analyzer.py
+│   ├── config.py             # Parse + SportsDataIO key resolution (.env / secrets / env)
+│   ├── sleeper_client.py     # Sleeper public REST API client
+│   ├── league_settings.py    # Sleeper league → LeagueFormat detection
+│   ├── data_providers.py     # FantasyCalc / KTC / DraftSharks typed-client providers
+│   ├── nfl_stats.py          # nflverse (nflreadpy) realized stats + production signal
+│   ├── sportsdata_client.py  # SportsDataIO NFL API client (header-auth)
+│   ├── sportsdata_provider.py# SportsDataIO stat/projection/news row parsing
+│   ├── player_detail.py      # Assemble one player's detail bundle for the pop-up modal
+│   ├── scrambled_fields.py   # Registry of scrambled fields ↔ nflverse counterparts
+│   ├── stat_validation.py    # Correct scrambled SportsDataIO stats against nflverse
+│   ├── name_matching.py      # Cross-source name normalization + alias/fuzzy match
+│   ├── value_engine.py       # Weighted source blend + age/trend/injury/ADP/production adjustments
+│   ├── pick_valuation.py     # Pick ownership resolution + slot-tier valuation
+│   ├── value_store.py        # SQLite daily value snapshots (data/value_history.db)
+│   ├── insights.py           # Buy-low/sell-high, team profiling, timeline fit, VOR
+│   ├── trade_calculator.py   # Trade grading engine (format-aware multipliers)
+│   ├── trade_analyzer.py     # Best-trade finder, mutual-benefit filter, arbitrage
+│   └── ui/                   # Sidebar + tab renderers (thin; logic lives above)
+├── parse_apis/               # Typed Parse clients (generated by `parse sync`)
+└── tests/                    # 300 network-free unit tests
 ```
+
+Data flow: Sleeper league → format detection → Parse providers (FantasyCalc
+joins rosters by `sleeper_id`; KTC/DraftSharks join by name) → value engine
+(your weights) → trade calculator/analyzer → UI.
 
 ## Quick start
 
-### 1. Install dependencies
+### 1. Install dependencies and sync the Parse clients
 
 ```bash
 uv sync
 ```
 
-### 2. Configure your Parse.bot API key
-
-Create `.streamlit/secrets.toml` (already ignored by `.gitignore`):
-
-```toml
-[parse_bot]
-api_key = "your-parse-bot-api-key"
+```bash
+uv run parse sync
 ```
 
-Or enter it directly in the app sidebar at runtime.
+The generated API clients under `parse_apis/` are gitignored — `parse sync`
+(with `PARSE_API_KEY` set, or after `uv run parse login`) creates them on a
+fresh checkout.
+
+### 2. Configure your API keys
+
+Copy `.env.example` to `.env` (already ignored by `.gitignore`) and fill in:
+
+```bash
+SPORTSDATA_API_KEY=your-sportsdata-key   # player performance / projections
+PARSE_API_KEY=your-parse-key             # dynasty market values
+```
+
+Both keys are optional and the app degrades gracefully without them (the
+**Parse** key powers market values; the **SportsDataIO** key adds projections
+and the scramble-validation panel — realized stats come from nflverse either
+way). Each key can alternatively live in `.streamlit/secrets.toml`:
+
+```toml
+[parse]
+api_key = "your-parse-api-key"
+
+[sportsdata]
+api_key = "your-sportsdata-key"
+```
+
+The Parse key can also be entered in the sidebar or supplied via
+`uv run parse login`.
 
 ### 3. Run the app
 
 ```bash
-streamlit run app.py
+uv run streamlit run app.py
 ```
 
 Then open <http://localhost:8501> in your browser.
@@ -61,29 +108,51 @@ Then open <http://localhost:8501> in your browser.
 ### 4. Connect your Sleeper league
 
 1. Enter your **Sleeper username** in the sidebar.
-2. Select the **season** and **league**.
-3. Explore the tabs: League Overview → My Roster → Trade Explorer → Best Trades → Arbitrage.
+2. Select the **season** and **league** — the format panel shows what was
+   detected (e.g. `12-team · Superflex · Full PPR · Dynasty`) with overrides.
+3. Tune the **⚖️ Value model** if you like, then explore the tabs.
 
 ## Running tests
 
 ```bash
-pytest tests/ -v
+uv run pytest
 ```
 
-## How the trade calculator works
+Tests are fully network-free (stubbed API clients) and pass without a Parse
+API key.
 
-### Superflex PPR multipliers
+## How valuation works
 
-Dynasty superflex leagues allow two QBs to start simultaneously, significantly
-increasing QB value.  The calculator applies the following multipliers on top of
-raw consensus values:
+### Source blend
+
+Each source's values are normalized 0–100, then blended with per-player
+weight renormalization (default FantasyCalc 0.5 / KTC 0.3 / DraftSharks 0.2).
+A player covered by one source keeps full value rather than being averaged
+against zeros.
+
+> **Note:** DraftSharks' dynasty-rankings endpoint currently returns a 502
+> on every dynasty request (upstream issue, confirmed across scoring and
+> league-type combinations). Until that's fixed upstream, DraftSharks values
+> are pulled from their non-dynasty rankings instead — see
+> `draftsharks_params()` in `src/league_settings.py`.
+
+### Adjustments (each 0–1, applied to the blend)
+
+| Adjustment | Signal |
+|-----------|--------|
+| Age curve | Piecewise positional curves — RBs cliff at 27–29, WRs decline from ~27, QBs/TEs age slowest |
+| Trend momentum | 30-day value change (FantasyCalc + KTC), clamped ±30% |
+| Injury risk | DraftSharks risk label: medium −5%, high −12%, very high −15% |
+| ADP divergence | Players drafted later than their value rank get a boost (cheap to buy) |
+| Recent production | Validated fantasy PPG percentile within position (nflverse), ±25% at full weight |
+
+### Format-aware multipliers
 
 | Position | Multiplier |
 |----------|-----------|
-| QB | 1.30× |
-| RB | 1.00× |
-| WR | 1.00× |
-| TE | 1.10× |
+| QB | 1.30× in superflex, 1.00× in 1QB |
+| RB / WR | 1.00× |
+| TE | 1.10× (1.20× with TE premium) |
 
 ### Trade grades
 
@@ -97,20 +166,96 @@ raw consensus values:
 | C | −10% to −20% |
 | D | < −20% |
 
-### Arbitrage detection
+**Mutual-benefit filter:** Best Trades re-grades every proposal from the
+counterparty's perspective (their positional needs included) and drops
+anything they'd grade below **C+** — killing the "trades nobody accepts"
+problem of brute-force finders.
 
-The analyzer normalises each source's player values to a 0–100 scale, then
-flags any player where `(max_source_value − min_source_value) / consensus_value`
-exceeds the configured threshold (default 20%).  Players flagged as **buy** have
-at least one source undervaluing them by ≥ 15% below consensus — a signal to
-acquire them before the market corrects.
+**Trade balance dial:** a slider ranks proposals anywhere from *maximize my
+value* (0% — may surface lopsided A+/C+ trades) to *maximize mutual benefit*
+(100% — need-complementary B+/B+ trades both managers would accept), with a
+true midpoint at 50%. Because raw value-gain and mutual-benefit live on very
+different scales, the two objectives are blended by **percentile rank** within
+the candidate pool rather than by raw score, so the dial behaves linearly.
+
+### Draft picks
+
+Every future pick (3 seasons out) is assigned to its current owner via
+Sleeper's traded-picks data. Its tier (early/mid/late) comes from the
+*original* owner's roster-strength rank, with a 1.10× superflex rookie
+premium and a 0.9×/year future discount.
+
+## Player performance & scramble validation
+
+The **Performance** tab surfaces real on-field production, and the value model
+can be tilted toward it via the **Recent production** slider.
+
+* **nflverse (nflreadpy)** is the source of truth for realized stats —
+  free and *unscrambled*. It provides season and weekly production and the
+  ffverse ID crosswalk.
+* **SportsDataIO** adds season projections. On its **free tier almost every
+  numeric stat is scrambled ±5-20%**, so its *realized* stats are reconciled
+  against nflverse: each scrambled field is replaced with the confirmed
+  nflverse value, joined **by ID** (SportsDataIO `PlayerID` = nflverse
+  `fantasy_data_id`) or **by name** as a fallback. A data-quality panel reports
+  the match rate and how many fields were corrected. Projections describe the
+  future, so they have no nflverse ground truth and are flagged **approximate**.
+* The **Recent production** adjustment scores each player by validated fantasy
+  PPG percentile within their position (±25% at full weight) — so trades can
+  reflect who is actually producing, not just market value.
+
+Performance data is cached in `data/dtf.db` (and nflverse's own disk cache);
+click **🔄 Stats** in the sidebar to refetch.
+
+## Player detail pop-up
+
+Click a player's **row** in any ranked table (Trade Targets, Best Trades,
+Arbitrage, My Roster, Trends) to open a modal that pulls together, in one place,
+everything the app knows about them:
+
+* **Value** — the per-source 0–100 values, consensus, cross-source spread (an
+  arbitrage signal), and the age/trend/injury/production adjustment badges.
+* **Performance** — the nflverse season stat line (position-aware) and a weekly
+  fantasy-points chart.
+* **Trends** — value history (local daily snapshots + rescaled FantasyCalc
+  history) and the 30-day trend.
+* **News** — recent **SportsDataIO** headlines (`NewsByPlayerID`). News text
+  isn't scrambled, so it's shown as-is; if your plan doesn't include the news
+  endpoint the section degrades to a friendly notice. Like the rest of the app,
+  news is **cache-until-refresh** — click **🔄 Stats** to refetch.
+* **Ownership** — which manager rosters the player (and their contender/rebuilder
+  timeline), or that they're a free agent.
+
+A **Best Trades** row bundles several players, so selecting it opens a trade
+breakdown with a button per player that drills into that player's detail.
+
+> Row selection is Streamlit's native table-selection mechanism. One quirk: a
+> dismissed modal leaves the row highlighted, so to reopen the *same* player you
+> select a different row first (or pick another and come back).
 
 ## Configuration reference
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| Parse.bot API key | — | Required for live value extraction |
+| Parse API key | — | Powers live values (`.env`, sidebar, `PARSE_API_KEY`, secrets, or `parse login`) |
+| SportsDataIO API key | — | Powers projections + scramble validation (`.env` `SPORTSDATA_API_KEY` or `[sportsdata]` secrets) |
 | Season | Current year | NFL season to sync from Sleeper |
-| Starter slots | QB×2, RB×2, WR×3, TE×1 | Superflex roster config used for need scoring |
+| League format | Auto-detected | Superflex/PPR/TE-premium; override in the sidebar |
+| Source weights | FC 0.5 / KTC 0.3 / DS 0.2 | Sidebar ⚖️ Value model |
+| Age curve weight | 0.5 | 0 = raw market values, 1 = full age curve |
+| Trend / injury / ADP weights | 0.0 | Opt-in adjustments |
+| Recent production weight | 0.0 | Tilt toward validated on-field production (±25% at 1.0) |
 | Arbitrage threshold | 20% | Minimum spread to flag an opportunity |
 | Max assets per side | 2 | Controls 1-for-1 and 2-for-2 best-trade search |
+| Value history | `data/value_history.db` | One snapshot per day, written on first app load |
+| Local cache | `data/dtf.db` | SQLModel cache of all Sleeper + Parse responses to cut API calls |
+
+## Local cache & refresh
+
+To keep API usage low, every Sleeper and Parse response is cached in a local
+SQLite database (`data/dtf.db`, via SQLModel). Data is reused indefinitely —
+a cold start after the first load makes **zero** API calls — and is only
+re-fetched when you click **🔄 Values** or **🔄 League** in the sidebar, which
+also shows how long ago each was cached. Your value-model weights and
+trade-finder options are persisted per Sleeper username and restored on your
+next visit.
