@@ -94,8 +94,7 @@ api_key = "your-parse-api-key"
 api_key = "your-sportsdata-key"
 ```
 
-The Parse key can also be entered in the sidebar or supplied via
-`uv run parse login`.
+The Parse key can also be supplied via `uv run parse login`.
 
 ### 3. Run the app
 
@@ -237,7 +236,7 @@ breakdown with a button per player that drills into that player's detail.
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| Parse API key | — | Powers live values (`.env`, sidebar, `PARSE_API_KEY`, secrets, or `parse login`) |
+| Parse API key | — | Powers live values (`.env` `PARSE_API_KEY`, `[parse]` secrets, or `parse login`) |
 | SportsDataIO API key | — | Powers projections + scramble validation (`.env` `SPORTSDATA_API_KEY` or `[sportsdata]` secrets) |
 | Season | Current year | NFL season to sync from Sleeper |
 | League format | Auto-detected | Superflex/PPR/TE-premium; override in the sidebar |

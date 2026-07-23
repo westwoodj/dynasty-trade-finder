@@ -50,13 +50,6 @@ def get_parse_api_key() -> Optional[str]:
     return None
 
 
-def set_parse_api_key_env(api_key: str) -> None:
-    """Expose *api_key* as ``PARSE_API_KEY`` so parse_sdk clients constructed
-    without an explicit key still authenticate."""
-    if api_key:
-        os.environ["PARSE_API_KEY"] = api_key
-
-
 def get_sportsdata_api_key() -> Optional[str]:
     """Resolve the SportsDataIO API key from secrets or the environment."""
     for candidate in (

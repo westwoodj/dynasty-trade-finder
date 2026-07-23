@@ -20,25 +20,10 @@ SOURCE_LABELS = {
 def render_connection_sidebar(
     fetch_user: Callable[[str], Optional[dict]],
     fetch_leagues: Callable[[str, str], list[dict]],
-    default_api_key: str,
     current_season: str,
 ) -> dict:
-    """API key, Sleeper username, season, and league selection."""
+    """Sleeper username, season, and league selection."""
     st.sidebar.title("🏈 Dynasty Trade Finder")
-    st.sidebar.markdown("---")
-
-    api_key = st.sidebar.text_input(
-        "Parse API key",
-        value=default_api_key,
-        type="password",
-        help=(
-            "Powers player values from FantasyCalc, KeepTradeCut, and "
-            "DraftSharks. Also read from PARSE_API_KEY or "
-            ".streamlit/secrets.toml ([parse] api_key). Leave blank if "
-            "you've run `parse login`."
-        ),
-    )
-
     st.sidebar.markdown("---")
 
     username = st.sidebar.text_input(
@@ -77,7 +62,6 @@ def render_connection_sidebar(
                 )
 
     return {
-        "api_key": api_key,
         "username": username,
         "user_data": user_data,
         "leagues": leagues,
