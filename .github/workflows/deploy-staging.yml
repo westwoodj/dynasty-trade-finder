@@ -28,24 +28,24 @@ jobs:
         uses: google-github-actions/setup-gcloud@v3
 
       - name: Configure Docker
-        run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+        run: gcloud auth configure-docker us-east1-docker.pkg.dev --quiet
 
       - name: Build and Push
         run: |
-          docker build -t us-central1-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-run-images/my-app:pr-${{ github.event.number }} .
-          docker push us-central1-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-run-images/my-app:pr-${{ github.event.number }}
+          docker build -t us-east1-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-run-images/my-app:pr-${{ github.event.number }} .
+          docker push us-east1-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-run-images/my-app:pr-${{ github.event.number }}
 
       # Deploy with a revision tag for testing
       - name: Deploy to staging
         id: deploy-staging
         run: |
           gcloud run deploy my-app \
-            --image=us-central1-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-run-images/my-app:pr-${{ github.event.number }} \
-            --region=us-central1 \
+            --image=us-east1-docker.pkg.dev/${{ env.PROJECT_ID }}/cloud-run-images/my-app:pr-${{ github.event.number }} \
+            --region=us-east1 \
             --tag=pr-${{ github.event.number }} \
             --no-traffic
           PREVIEW_URL=$(gcloud run services describe my-app \
-            --region=us-central1 \
+            --region=us-east1 \
             --format=json | jq -r --arg tag "pr-${{ github.event.number }}" '.status.traffic[] | select(.tag == $tag) | .url')
           echo "preview_url=${PREVIEW_URL}" >> "$GITHUB_OUTPUT"
 
