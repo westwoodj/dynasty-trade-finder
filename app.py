@@ -9,9 +9,8 @@ Run locally::
 Configuration
 -------------
 Player values come from the typed Parse API clients (FantasyCalc,
-KeepTradeCut, DraftSharks).  Provide your Parse API key via the sidebar,
-the ``PARSE_API_KEY`` environment variable, or
-``.streamlit/secrets.toml``::
+KeepTradeCut, DraftSharks).  Provide your Parse API key via the
+``PARSE_API_KEY`` environment variable or ``.streamlit/secrets.toml``::
 
     [parse]
     api_key = "your-key-here"
@@ -29,11 +28,7 @@ from typing import Optional
 import requests
 import streamlit as st
 
-from src.config import (
-    get_parse_api_key,
-    get_sportsdata_api_key,
-    set_parse_api_key_env,
-)
+from src.config import get_parse_api_key, get_sportsdata_api_key
 from src.data_providers import (
     FantasyCalcProvider,
     NormalizedPlayerValue,
@@ -434,8 +429,6 @@ for dynasty fantasy football leagues on Sleeper.
 1. Enter your **Sleeper username** in the sidebar.
 2. Select your **season** and **league** — scoring format (superflex, PPR,
    TE premium) is detected automatically.
-3. Add your **Parse API key** to pull live player values from
-   FantasyCalc, KeepTradeCut, and DraftSharks.
 
 ### Features
 | Tab | Description |
@@ -462,13 +455,11 @@ trend, injury, and ADP adjustments.
 def main() -> None:
     store = get_store()
     render_refresh_controls()
-    cfg = render_connection_sidebar(
-        fetch_user, fetch_leagues, get_parse_api_key() or "", CURRENT_SEASON
-    )
+    cfg = render_connection_sidebar(fetch_user, fetch_leagues, CURRENT_SEASON)
 
     user_data: Optional[dict] = cfg["user_data"]
     league_id: Optional[str] = cfg["league_id"]
-    api_key: str = cfg["api_key"]
+    api_key: str = get_parse_api_key() or ""
     username: str = cfg["username"]
 
     prefs = (
@@ -507,8 +498,6 @@ def main() -> None:
     production = production_signal_map(nfl_perf)
 
     # ---- Player values ----
-    if api_key:
-        set_parse_api_key_env(api_key)
     with st.spinner("Loading player values…"):
         sources, source_errors = fetch_source_values(fmt, api_key)
         engine = ValueEngine(weights, production=production)
@@ -519,9 +508,9 @@ def main() -> None:
 
     if not valuations:
         st.warning(
-            "No player values available. Add a Parse API key in the sidebar "
-            "(or run `uv run parse login` / `uv run parse sync`). Rosters "
-            "will show with zero values."
+            "No player values available. Set the PARSE_API_KEY environment "
+            "variable (or run `uv run parse login` / `uv run parse sync`). "
+            "Rosters will show with zero values."
         )
 
     with st.spinner("Building rosters & trade engine…"):

@@ -3,11 +3,7 @@
 import pytest
 import streamlit
 
-from src.config import (
-    get_parse_api_key,
-    get_sportsdata_api_key,
-    set_parse_api_key_env,
-)
+from src.config import get_parse_api_key, get_sportsdata_api_key
 
 
 @pytest.fixture(autouse=True)
@@ -63,20 +59,6 @@ def test_empty_values_are_skipped(monkeypatch):
     monkeypatch.setenv("PARSE_API_KEY", "")
     monkeypatch.setenv("PARSE_BOT_API_KEY", "fallback-key")
     assert get_parse_api_key() == "fallback-key"
-
-
-def test_set_parse_api_key_env(monkeypatch):
-    set_parse_api_key_env("my-key")
-    import os
-
-    assert os.environ["PARSE_API_KEY"] == "my-key"
-
-
-def test_set_parse_api_key_env_ignores_empty(monkeypatch):
-    set_parse_api_key_env("")
-    import os
-
-    assert "PARSE_API_KEY" not in os.environ
 
 
 # ---------------------------------------------------------------------------
