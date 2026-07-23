@@ -59,17 +59,27 @@ jobs:
           no_traffic: ${{ steps.service-check.outputs.exists == 'true' }}
           # Inject API keys from Secret Manager as env vars (values never touch
           # this YAML or the image). config.py reads these names from os.environ.
+          # The DB_PASS line and Cloud SQL flags/env below are only emitted when
+          # the CLOUD_SQL_INSTANCE repo variable is set; until then they resolve
+          # to blank lines and the app uses its SQLite fallback.
           secrets: |
             PARSE_API_KEY=parse-api-key:latest
             SPORTSDATA_API_KEY=sportsdata-api-key:latest
+            ${{ vars.CLOUD_SQL_INSTANCE && 'DB_PASS=db-password:latest' || '' }}
+          env_vars: |
+            ${{ vars.CLOUD_SQL_INSTANCE && format('INSTANCE_CONNECTION_NAME={0}', vars.CLOUD_SQL_INSTANCE) || '' }}
+            ${{ vars.CLOUD_SQL_INSTANCE && 'DB_USER=dtf' || '' }}
+            ${{ vars.CLOUD_SQL_INSTANCE && 'DB_NAME=dtf' || '' }}
           # session-affinity keeps a browser pinned to one instance so Streamlit's
           # websocket stays put; the memory bump avoids OOM while loading the NFL
           # player list + nflverse stats; 3600s timeout keeps long sockets open.
+          # --add-cloudsql-instances mounts the Cloud SQL socket on the revision.
           flags: >-
             --memory=2Gi
             --cpu=1
             --timeout=3600
             --session-affinity
+            ${{ vars.CLOUD_SQL_INSTANCE && format('--add-cloudsql-instances={0}', vars.CLOUD_SQL_INSTANCE) || '' }}
 
       # The deploy-cloudrun action does not grant public access, so anonymous
       # requests to the preview URL get a 403. Grant allUsers the invoker role
