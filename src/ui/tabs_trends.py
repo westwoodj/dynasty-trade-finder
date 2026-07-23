@@ -11,6 +11,7 @@ import streamlit as st
 from ..insights import Insight
 from ..value_engine import PlayerValuation
 from ..value_store import ValueStore
+from .components import PlayerRef, select_player_from_table
 
 _KIND_BADGES = {"buy_low": "🟢 Buy low", "sell_high": "🔴 Sell high"}
 
@@ -20,6 +21,7 @@ def render_trends(
     store: ValueStore,
     insights: list[Insight],
     fetch_history: Optional[Callable[[str], list[tuple[str, float]]]] = None,
+    on_select_player: Optional[Callable[[PlayerRef], None]] = None,
 ) -> None:
     st.header("📈 Trends & Market Signals")
 
@@ -47,7 +49,19 @@ def render_trends(
             }
             for i in insights
         ]
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        keys = [
+            PlayerRef(
+                name=i.player.name,
+                position=i.player.position,
+                sleeper_id=i.player.sleeper_id,
+            )
+            for i in insights
+        ]
+        ref = select_player_from_table(
+            pd.DataFrame(rows), keys, key="trends_insights"
+        )
+        if ref and on_select_player:
+            on_select_player(ref)
     else:
         st.info("No strong buy-low / sell-high signals right now.")
 
@@ -62,7 +76,7 @@ def render_trends(
         fallers = sorted(movers, key=lambda v: v.trend_frac or 0)[:10]
         with col1:
             st.markdown("**📈 Risers**")
-            st.dataframe(
+            ref = select_player_from_table(
                 pd.DataFrame(
                     [
                         {
@@ -74,12 +88,17 @@ def render_trends(
                         for v in risers
                     ]
                 ),
-                use_container_width=True,
-                hide_index=True,
+                [
+                    PlayerRef(name=v.name, position=v.position, sleeper_id=v.sleeper_id)
+                    for v in risers
+                ],
+                key="trends_risers",
             )
+            if ref and on_select_player:
+                on_select_player(ref)
         with col2:
             st.markdown("**📉 Fallers**")
-            st.dataframe(
+            ref = select_player_from_table(
                 pd.DataFrame(
                     [
                         {
@@ -91,9 +110,14 @@ def render_trends(
                         for v in fallers
                     ]
                 ),
-                use_container_width=True,
-                hide_index=True,
+                [
+                    PlayerRef(name=v.name, position=v.position, sleeper_id=v.sleeper_id)
+                    for v in fallers
+                ],
+                key="trends_fallers",
             )
+            if ref and on_select_player:
+                on_select_player(ref)
     else:
         st.info("No trend data available from the value sources.")
 

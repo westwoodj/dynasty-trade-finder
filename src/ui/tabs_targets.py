@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Callable, Optional
+
 import pandas as pd
 import streamlit as st
 
@@ -9,7 +11,12 @@ from ..name_matching import normalize_name
 from ..trade_analyzer import TradeAnalyzer
 from ..trade_calculator import TradeAsset
 from ..value_engine import PlayerValuation
-from .components import POSITIONS, format_components
+from .components import (
+    POSITIONS,
+    PlayerRef,
+    format_components,
+    select_player_from_table,
+)
 
 
 def render_trade_targets(
@@ -19,6 +26,7 @@ def render_trade_targets(
     positional_need: dict[str, int],
     analyzer: TradeAnalyzer,
     name_map: dict[str, PlayerValuation],
+    on_select_player: Optional[Callable[[PlayerRef], None]] = None,
 ) -> None:
     st.header("🎯 Trade Targets")
     st.markdown(
@@ -46,6 +54,7 @@ def render_trade_targets(
     top_n = st.slider("Show top", 10, 100, 30, 10, key="targets_top_n")
 
     rows = []
+    row_keys: list[PlayerRef] = []
     for asset, team_name, score in targets:
         if asset.position not in pos_filter:
             continue
@@ -62,10 +71,23 @@ def render_trade_targets(
                 "Why": format_components(valuation),
             }
         )
+        row_keys.append(
+            PlayerRef(
+                name=asset.name,
+                position=asset.position,
+                sleeper_id=valuation.sleeper_id if valuation else None,
+            )
+        )
         if len(rows) >= top_n:
             break
 
-    if rows:
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-    else:
+    if not rows:
         st.info("No targets match the current filters.")
+        return
+
+    st.caption("💡 Click a player's row for full detail.")
+    ref = select_player_from_table(
+        pd.DataFrame(rows), row_keys, key="targets_table"
+    )
+    if ref and on_select_player:
+        on_select_player(ref)

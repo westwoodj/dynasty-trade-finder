@@ -121,7 +121,15 @@ def fantasycalc_params(fmt: LeagueFormat) -> dict:
 
 
 def draftsharks_params(fmt: LeagueFormat) -> dict:
-    """Query params for ``DraftSharks().players.list``."""
+    """Query params for ``DraftSharks().players.list``.
+
+    ``is_dynasty`` is hardcoded to ``"false"`` regardless of ``fmt.is_dynasty``:
+    DraftSharks' upstream dynasty-rankings endpoint currently 502s on every
+    scoring/league_type combination (confirmed against both the pinned and
+    latest scraper versions), so we always pull redraft rankings instead.
+    Flip this back to ``"true" if fmt.is_dynasty else "false"`` once upstream
+    is fixed.
+    """
     if fmt.ppr >= 0.75:
         scoring = "ppr"
     elif fmt.ppr >= 0.25:
@@ -131,7 +139,7 @@ def draftsharks_params(fmt: LeagueFormat) -> dict:
     return {
         "scoring": scoring,
         "league_type": "superflex" if fmt.is_superflex else "standard",
-        "is_dynasty": "true" if fmt.is_dynasty else "false",
+        "is_dynasty": "false",
     }
 
 

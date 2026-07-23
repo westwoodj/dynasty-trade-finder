@@ -11,6 +11,8 @@ dependencies = [
     "requests>=2.34.2",
     "streamlit>=1.60.0",
     "sqlmodel>=0.0.39",
+    "nflreadpy>=0.1.5",
+    "python-dotenv>=1.2.2",
 ]
 
 [dependency-groups]
@@ -21,6 +23,10 @@ dev = [
 
 [tool.uv.sources]
 parse-apis = { path = "parse_apis", editable = true }
+
+# Managed by the parse CLI (`parse add` / `parse remove` / `parse sync`).
+# Edit `apis` to curate which of your account APIs this repo syncs;
+# an absent `apis` key means all of them.
 
 # Managed by the parse CLI (`parse add` / `parse remove` / `parse sync`).
 # Edit `apis` to curate which of your account APIs this repo syncs;
@@ -77,3 +83,10 @@ slug = "keeptradecut_com_api"
 version = 1
 listing_id = "b7c3ba52-2896-48b7-8cb3-883d36787c09"
 source_url = "https://keeptradecut.com/"
+
+[[tool.parse.marketplace]]
+scraper_id = "1063a484-f52f-4db5-a50f-b26705848e2f"
+slug = "spotrac_com_api"
+version = 9
+listing_id = "7994a459-31cd-4d12-a28b-5c053246f105"
+source_url = "https://spotrac.com"

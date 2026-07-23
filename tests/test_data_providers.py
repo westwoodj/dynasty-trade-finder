@@ -274,7 +274,9 @@ class TestDraftSharksProvider:
         assert call["depth"] == "rankings"
         assert call["league_type"] == "superflex"
         assert call["scoring"] == "ppr"
-        assert call["is_dynasty"] == "true"
+        # Forced to "false" regardless of league format: the upstream
+        # DraftSharks dynasty-rankings endpoint currently 502s.
+        assert call["is_dynasty"] == "false"
 
 
 # ---------------------------------------------------------------------------

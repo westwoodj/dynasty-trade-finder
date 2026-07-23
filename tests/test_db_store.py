@@ -8,6 +8,7 @@ fetcher, which is how the DB reduces API calls.
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import text
 from sqlmodel import create_engine
 
 from src.data_providers import NormalizedPlayerValue
@@ -23,6 +24,51 @@ def store(tmp_path) -> DtfStore:
         connect_args={"check_same_thread": False},
     )
     return DtfStore(engine)
+
+
+class TestSchemaMigration:
+    """Existing DBs predating a new model column must be migrated in place."""
+
+    def test_missing_column_added_to_existing_table(self, tmp_path) -> None:
+        db = tmp_path / "old.db"
+        engine = create_engine(
+            f"sqlite:///{db}", connect_args={"check_same_thread": False}
+        )
+        # Simulate an older schema: user_preferences without production_weight.
+        with engine.begin() as c:
+            c.execute(
+                text(
+                    "CREATE TABLE user_preferences ("
+                    "username VARCHAR PRIMARY KEY, source_weights_json VARCHAR, "
+                    "age_weight FLOAT, trend_weight FLOAT, injury_weight FLOAT, "
+                    "adp_divergence_weight FLOAT, override_enabled BOOLEAN, "
+                    "num_qbs INTEGER, ppr FLOAT, te_premium BOOLEAN, "
+                    "selected_season VARCHAR, selected_league_id VARCHAR, "
+                    "fairness_weight FLOAT, top_n INTEGER, include_picks BOOLEAN, "
+                    "mutual_only BOOLEAN, timeline_fit BOOLEAN, arb_threshold FLOAT, "
+                    "updated_at DATETIME)"
+                )
+            )
+            c.execute(
+                text(
+                    "INSERT INTO user_preferences (username, age_weight, trend_weight, "
+                    "injury_weight, adp_divergence_weight) "
+                    "VALUES ('Percules', 0.5, 0.0, 0.0, 0.0)"
+                )
+            )
+
+        # Constructing the store migrates the schema; loading no longer raises.
+        store = DtfStore(engine)
+        prefs = store.load_preferences("Percules")
+        assert prefs.production_weight == 0.0  # backfilled by the ADD COLUMN default
+
+    def test_migration_is_idempotent(self, tmp_path) -> None:
+        db = tmp_path / "idem.db"
+        engine = create_engine(
+            f"sqlite:///{db}", connect_args={"check_same_thread": False}
+        )
+        DtfStore(engine)
+        DtfStore(engine)  # second construction must not raise
 
 
 class _Counter:

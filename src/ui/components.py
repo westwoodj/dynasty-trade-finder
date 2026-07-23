@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from typing import Optional
 
+import pandas as pd
+import streamlit as st
+from pydantic import BaseModel
+
 from ..name_matching import match_name, normalize_name
 from ..trade_calculator import TradeAsset
 from ..value_engine import PlayerValuation
@@ -122,16 +126,89 @@ def roster_to_assets(
     return assets, unmatched
 
 
-def format_components(valuation: Optional[PlayerValuation]) -> str:
-    """Human-readable adjustment badges, e.g. ``age −8% · trend +3%``."""
-    if valuation is None:
-        return ""
+def format_component_badges(components: dict[str, float]) -> str:
+    """Human-readable adjustment badges from a components dict,
+    e.g. ``age −8% · trend +3%``."""
     parts = []
-    for label, frac in valuation.components.items():
+    for label, frac in components.items():
         if abs(frac) >= 0.005:
             sign = "+" if frac > 0 else "−"
             parts.append(f"{label} {sign}{abs(frac) * 100:.0f}%")
     return " · ".join(parts)
+
+
+def format_components(valuation: Optional[PlayerValuation]) -> str:
+    """Human-readable adjustment badges for a valuation (``""`` if ``None``)."""
+    if valuation is None:
+        return ""
+    return format_component_badges(valuation.components)
+
+
+# ---------------------------------------------------------------------------
+# Clickable-row → player-detail modal plumbing
+# ---------------------------------------------------------------------------
+
+
+class PlayerRef(BaseModel):
+    """Lightweight identity of a player selected from a table row."""
+
+    name: str
+    position: str = ""
+    sleeper_id: Optional[str] = None
+
+    @property
+    def dedupe_key(self) -> str:
+        return self.sleeper_id or f"name:{normalize_name(self.name)}:{self.position}"
+
+
+def select_table_row(df: "pd.DataFrame", *, key: str) -> Optional[int]:
+    """Render *df* as a single-row-selectable table; return a *newly* picked row.
+
+    Returns the selected row's underlying iloc position (Streamlit reports the
+    original position regardless of any client-side column sort), but only on the
+    run where the selection first changes — ``None`` on subsequent runs while the
+    same row stays selected.  This per-table de-dupe (keyed by *key*) is what lets
+    the caller open a modal exactly once: a dismissed ``st.dialog`` reruns the
+    script with the row still selected, and without the guard the modal would
+    reopen in a loop.  Selecting a different row reopens it.
+    """
+    event = st.dataframe(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        key=key,
+    )
+    state_key = f"_detail_row::{key}"
+    rows = getattr(event, "selection", {}).get("rows", []) if event else []
+    if not rows:
+        # Selection cleared — forget it so re-picking the same row counts as new.
+        st.session_state.pop(state_key, None)
+        return None
+    idx = rows[0]
+    if st.session_state.get(state_key) == idx:
+        return None  # already handled this selection; don't reopen
+    st.session_state[state_key] = idx
+    return idx
+
+
+def select_player_from_table(
+    df: "pd.DataFrame",
+    row_keys: list[PlayerRef],
+    *,
+    key: str,
+) -> Optional[PlayerRef]:
+    """Single-row-selectable table that maps the pick back to a :class:`PlayerRef`.
+
+    *row_keys* is a parallel list — one :class:`PlayerRef` per row, in DataFrame
+    order.  Returns the newly-selected player (see :func:`select_table_row` for
+    the once-per-selection semantics) or ``None``.
+    """
+    idx = select_table_row(df, key=key)
+    if idx is None or not 0 <= idx < len(row_keys):
+        return None
+    return row_keys[idx]
 
 
 def nearest_player(

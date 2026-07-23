@@ -1,25 +1,28 @@
 """Configuration helpers for the Dynasty Trade Finder.
 
-The Parse API key powers the typed ``parse_apis`` clients (FantasyCalc,
-DraftSharks, KeepTradeCut, …).  It can be supplied via, in order of
-precedence:
+Two API keys are resolved here:
 
-1. ``.streamlit/secrets.toml``::
+* **Parse** (``get_parse_api_key``) powers the typed ``parse_apis`` clients
+  (FantasyCalc, DraftSharks, KeepTradeCut, …).
+* **SportsDataIO** (``get_sportsdata_api_key``) powers the NFL performance /
+  projection endpoints.
 
-       [parse]
-       api_key = "your-key-here"
-
-2. The ``PARSE_API_KEY`` environment variable (also what ``parse_sdk``
-   reads natively).
-3. Legacy locations kept for backwards compatibility: the
-   ``[parse_bot]`` secrets section and the ``PARSE_BOT_API_KEY``
-   environment variable.
+Both follow the same precedence: ``.streamlit/secrets.toml`` → environment
+variable.  A ``.env`` file at the repo root is loaded on import (via
+``python-dotenv``) so secrets can live there instead of the shell; see
+``.env.example``.  ``.env`` is gitignored — never commit real keys.
 """
 
 from __future__ import annotations
 
 import os
 from typing import Optional
+
+from dotenv import load_dotenv
+
+# Populate os.environ from a repo-root .env once, at import time. Existing
+# environment variables win (override=False), and a missing file is a no-op.
+load_dotenv(override=False)
 
 
 def _secret(section: str, key: str) -> Optional[str]:
@@ -52,3 +55,14 @@ def set_parse_api_key_env(api_key: str) -> None:
     without an explicit key still authenticate."""
     if api_key:
         os.environ["PARSE_API_KEY"] = api_key
+
+
+def get_sportsdata_api_key() -> Optional[str]:
+    """Resolve the SportsDataIO API key from secrets or the environment."""
+    for candidate in (
+        _secret("sportsdata", "api_key"),
+        os.environ.get("SPORTSDATA_API_KEY"),
+    ):
+        if candidate:
+            return candidate
+    return None

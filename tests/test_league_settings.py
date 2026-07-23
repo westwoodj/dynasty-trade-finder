@@ -118,12 +118,14 @@ class TestQueryParams:
         assert fantasycalc_params(fmt)["num_teams"] == "14"
 
     def test_draftsharks_superflex_ppr(self) -> None:
+        # is_dynasty is forced to "false" regardless of fmt.is_dynasty: the
+        # upstream DraftSharks dynasty-rankings endpoint currently 502s.
         fmt = LeagueFormat(num_qbs=2, ppr=1.0, is_dynasty=True)
         params = draftsharks_params(fmt)
         assert params == {
             "scoring": "ppr",
             "league_type": "superflex",
-            "is_dynasty": "true",
+            "is_dynasty": "false",
         }
 
     def test_draftsharks_standard_half_ppr(self) -> None:

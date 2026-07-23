@@ -47,6 +47,7 @@ class ValueWeights(BaseModel):
     trend_weight: float = 0.0
     injury_weight: float = 0.0
     adp_divergence_weight: float = 0.0
+    production_weight: float = 0.0
 
     def source_weights_dict(self) -> dict[str, float]:
         return dict(self.source_weights)
@@ -56,6 +57,7 @@ class ValueWeights(BaseModel):
         return (
             f"{sources}|age{self.age_weight:g}|tr{self.trend_weight:g}"
             f"|inj{self.injury_weight:g}|adp{self.adp_divergence_weight:g}"
+            f"|prod{self.production_weight:g}"
         )
 
 
@@ -138,11 +140,22 @@ def _clamp(value: float, lo: float, hi: float) -> float:
 # ---------------------------------------------------------------------------
 
 
+# Max ± swing of the recent-production adjustment at production_weight = 1.
+PRODUCTION_MAX = 0.25
+
+
 class ValueEngine:
     """Blend multi-source values into weighted, adjusted valuations."""
 
-    def __init__(self, weights: Optional[ValueWeights] = None) -> None:
+    def __init__(
+        self,
+        weights: Optional[ValueWeights] = None,
+        production: Optional[dict[str, float]] = None,
+    ) -> None:
         self.weights = weights or ValueWeights()
+        # Recent-production signal in [-1, 1] keyed by ``sleeper_id`` and
+        # ``name:<normalized>`` (see :func:`src.nfl_stats.production_signal_map`).
+        self._production = production or {}
 
     # ------------------------------------------------------------------
 
@@ -300,13 +313,30 @@ class ValueEngine:
                 (valuation._adp_rank - valuation._value_rank) / 100.0, -0.2, 0.2
             )
 
+        # Recent production: a ±1 signal from validated fantasy PPG percentile
+        # within the player's position, scaled to a bounded value swing.
+        prod_sig = self._production_signal(valuation)
+
         components = {
             "age": age_factor - 1.0,
             "trend": weights.trend_weight * trend_sig,
             "injury": weights.injury_weight * injury_sig,
             "adp": weights.adp_divergence_weight * adp_sig,
+            "production": weights.production_weight * PRODUCTION_MAX * prod_sig,
         }
         valuation.components = components
         valuation.adjusted_value = base * age_factor * (
-            1.0 + components["trend"] + components["injury"] + components["adp"]
+            1.0
+            + components["trend"]
+            + components["injury"]
+            + components["adp"]
+            + components["production"]
         )
+
+    def _production_signal(self, valuation: PlayerValuation) -> float:
+        """Recent-production signal in [-1, 1] for *valuation* (0 if unknown)."""
+        if not self._production:
+            return 0.0
+        if valuation.sleeper_id and valuation.sleeper_id in self._production:
+            return self._production[valuation.sleeper_id]
+        return self._production.get(f"name:{normalize_name(valuation.name)}", 0.0)

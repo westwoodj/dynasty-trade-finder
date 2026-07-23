@@ -55,11 +55,15 @@ def render_connection_sidebar(
     league_id: Optional[str] = None
 
     if username:
-        user_data = fetch_user(username)
+        with st.sidebar:
+            with st.spinner("Looking up your Sleeper account…"):
+                user_data = fetch_user(username)
+                leagues = (
+                    fetch_leagues(user_data["user_id"], season) if user_data else []
+                )
         if user_data is None:
             st.sidebar.error("Username not found.")
         else:
-            leagues = fetch_leagues(user_data["user_id"], season)
             if not leagues:
                 st.sidebar.warning("No leagues found for this season.")
             else:
@@ -158,9 +162,21 @@ def render_value_model(saved: Optional[ValueWeights] = None) -> ValueWeights:
         adp = st.slider(
             "ADP divergence", 0.0, 1.0, saved.adp_divergence_weight, 0.05, key="w_adp"
         )
+        production = st.slider(
+            "Recent production",
+            0.0,
+            1.0,
+            saved.production_weight,
+            0.05,
+            key="w_production",
+            help=(
+                "Tilt values toward players' validated on-field fantasy "
+                "production (nflverse, ±5-20% scramble corrected)."
+            ),
+        )
 
         if st.button("Reset to defaults", key="w_reset"):
-            for key in ("w_age", "w_trend", "w_injury", "w_adp"):
+            for key in ("w_age", "w_trend", "w_injury", "w_adp", "w_production"):
                 st.session_state.pop(key, None)
             for source in base:
                 st.session_state.pop(f"w_{source}", None)
@@ -172,6 +188,7 @@ def render_value_model(saved: Optional[ValueWeights] = None) -> ValueWeights:
         trend_weight=trend,
         injury_weight=injury,
         adp_divergence_weight=adp,
+        production_weight=production,
     )
 
 
@@ -188,6 +205,12 @@ def render_diagnostics(
             )
         for source, error in source_errors.items():
             st.markdown(f"⚠️ **{SOURCE_LABELS.get(source, source)}** — {error}")
+        if "draftsharks" in sources or "draftsharks" in source_errors:
+            st.caption(
+                "ℹ️ DraftSharks' dynasty rankings are currently broken upstream "
+                "(502 on every dynasty request), so values shown are pulled "
+                "from their non-dynasty rankings instead."
+            )
         if unmatched:
             st.markdown(
                 f"❓ **{len(unmatched)} rostered players without values** "

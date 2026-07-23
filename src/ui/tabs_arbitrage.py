@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+from typing import Callable, Optional
+
 import pandas as pd
 import streamlit as st
 
 from ..data_providers import NormalizedPlayerValue
 from ..name_matching import normalize_name
 from ..trade_analyzer import TradeAnalyzer
+from .components import PlayerRef, select_player_from_table
 
 
 def render_arbitrage(
     sources: dict[str, list[NormalizedPlayerValue]],
     analyzer: TradeAnalyzer,
     prefs=None,
+    on_select_player: Optional[Callable[[PlayerRef], None]] = None,
 ) -> None:
     st.header("📊 Arbitrage Opportunities")
     st.markdown(
@@ -60,6 +64,7 @@ def render_arbitrage(
         opps = [o for o in opps if o.recommendation == rec_filter.lower()]
 
     rows = []
+    row_keys: list[PlayerRef] = []
     for o in opps:
         source_cols = {
             f"{src} value": round(val, 1) for src, val in o.values_by_source.items()
@@ -75,8 +80,13 @@ def render_arbitrage(
                 **source_cols,
             }
         )
+        row_keys.append(PlayerRef(name=o.player_name))
 
-    if rows:
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-    else:
+    if not rows:
         st.info("No opportunities match the current filter.")
+        return
+
+    st.caption("💡 Click a player's row for full detail.")
+    ref = select_player_from_table(pd.DataFrame(rows), row_keys, key="arb_table")
+    if ref and on_select_player:
+        on_select_player(ref)

@@ -1,9 +1,13 @@
-"""Tests for src.config — Parse API key resolution."""
+"""Tests for src.config — Parse + SportsDataIO API key resolution."""
 
 import pytest
 import streamlit
 
-from src.config import get_parse_api_key, set_parse_api_key_env
+from src.config import (
+    get_parse_api_key,
+    get_sportsdata_api_key,
+    set_parse_api_key_env,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -11,6 +15,7 @@ def clean_environment(monkeypatch):
     """Isolate each test from real env vars and secrets."""
     monkeypatch.delenv("PARSE_API_KEY", raising=False)
     monkeypatch.delenv("PARSE_BOT_API_KEY", raising=False)
+    monkeypatch.delenv("SPORTSDATA_API_KEY", raising=False)
     monkeypatch.setattr(streamlit, "secrets", {}, raising=False)
 
 
@@ -72,3 +77,25 @@ def test_set_parse_api_key_env_ignores_empty(monkeypatch):
     import os
 
     assert "PARSE_API_KEY" not in os.environ
+
+
+# ---------------------------------------------------------------------------
+# SportsDataIO key resolution
+# ---------------------------------------------------------------------------
+
+
+def test_sportsdata_none_when_unconfigured():
+    assert get_sportsdata_api_key() is None
+
+
+def test_sportsdata_env_var(monkeypatch):
+    monkeypatch.setenv("SPORTSDATA_API_KEY", "sd-env")
+    assert get_sportsdata_api_key() == "sd-env"
+
+
+def test_sportsdata_secrets_win_over_env(monkeypatch):
+    monkeypatch.setenv("SPORTSDATA_API_KEY", "sd-env")
+    monkeypatch.setattr(
+        streamlit, "secrets", {"sportsdata": {"api_key": "sd-secret"}}, raising=False
+    )
+    assert get_sportsdata_api_key() == "sd-secret"

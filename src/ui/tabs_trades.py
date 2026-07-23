@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Callable, Optional
 
 import pandas as pd
 import streamlit as st
@@ -11,7 +11,7 @@ from ..insights import TeamProfile, timeline_fit_bonus
 from ..trade_analyzer import TradeAnalyzer
 from ..trade_calculator import TradeAsset, TradeCalculator, TradeResult
 from ..value_engine import PlayerValuation
-from .components import POSITIONS, nearest_player
+from .components import POSITIONS, PlayerRef, nearest_player, select_table_row
 
 GRADE_COLORS = {
     "A+": "green", "A": "green", "B+": "green",
@@ -125,12 +125,19 @@ def render_best_trades(
     profiles_by_team: dict[str, TeamProfile],
     my_classification: str,
     prefs=None,
+    on_select_player: Optional[Callable[[PlayerRef], None]] = None,
 ) -> None:
     st.header("⚡ Best Trades")
     st.markdown(
         "Automatically generated proposals that improve your team, ranked by "
         "value gain, mutual benefit, positional need, and timeline fit."
     )
+
+    # A trade row bundles multiple players, so selecting one opens a breakdown
+    # dialog with a button per player; that button routes here via session state.
+    pending = st.session_state.pop("_bt_pending_player", None)
+    if pending is not None and on_select_player is not None:
+        on_select_player(pending)
 
     c1, c2 = st.columns([1, 2])
     include_picks = c1.checkbox(
@@ -218,6 +225,7 @@ def render_best_trades(
     )
 
     rows = []
+    shown = []
     for p in proposals:
         if not any(a.position in pos_filter for a in p.receiving):
             continue
@@ -233,8 +241,45 @@ def render_best_trades(
         if p.their_grade is not None:
             row["Their Grade"] = p.their_grade
         rows.append(row)
+        shown.append(p)
 
-    if rows:
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-    else:
+    if not rows:
         st.info("No proposals match the selected position filter.")
+        return
+
+    st.caption("💡 Click a trade row to break it down and inspect each player.")
+    idx = select_table_row(pd.DataFrame(rows), key="best_trades_table")
+    if idx is not None and 0 <= idx < len(shown):
+        _open_trade_breakdown(shown[idx])
+
+
+def _open_trade_breakdown(proposal) -> None:
+    """Pop-up listing a proposal's players as buttons that open player detail."""
+
+    @st.dialog("Trade breakdown", width="large")
+    def _dialog() -> None:
+        st.caption(f"With **{proposal.their_team}** · your grade {proposal.result.grade}")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**You give**")
+            _player_buttons(proposal.giving, "give")
+        with c2:
+            st.markdown("**You receive**")
+            _player_buttons(proposal.receiving, "recv")
+        st.caption("Click a player to see full detail.")
+
+    _dialog()
+
+
+def _player_buttons(assets: list[TradeAsset], prefix: str) -> None:
+    for i, asset in enumerate(assets):
+        if asset.is_pick:
+            st.markdown(f"• {asset.display_name} _(pick)_")
+            continue
+        if st.button(f"🔍 {asset.display_name}", key=f"bt_{prefix}_{i}_{asset.name}"):
+            # Route to the shared player-detail modal on the next full rerun,
+            # which also dismisses this breakdown dialog.
+            st.session_state["_bt_pending_player"] = PlayerRef(
+                name=asset.name, position=asset.position
+            )
+            st.rerun()

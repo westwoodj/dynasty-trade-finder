@@ -33,6 +33,7 @@ def utcnow() -> datetime:
 
 class SleeperUserCache(SQLModel, table=True):
     __tablename__ = "sleeper_user_cache"
+    __table_args__ = {"extend_existing": True}
 
     username: str = Field(primary_key=True)
     user_id: str = ""
@@ -42,6 +43,7 @@ class SleeperUserCache(SQLModel, table=True):
 
 class SleeperLeaguesCache(SQLModel, table=True):
     __tablename__ = "sleeper_leagues_cache"
+    __table_args__ = {"extend_existing": True}
 
     key: str = Field(primary_key=True)  # "<user_id>/<season>"
     payload_json: str = ""
@@ -50,6 +52,7 @@ class SleeperLeaguesCache(SQLModel, table=True):
 
 class LeagueDataCache(SQLModel, table=True):
     __tablename__ = "league_data_cache"
+    __table_args__ = {"extend_existing": True}
 
     league_id: str = Field(primary_key=True)
     league_json: str = ""
@@ -60,6 +63,7 @@ class LeagueDataCache(SQLModel, table=True):
 
 class DraftDataCache(SQLModel, table=True):
     __tablename__ = "draft_data_cache"
+    __table_args__ = {"extend_existing": True}
 
     league_id: str = Field(primary_key=True)
     drafts_json: str = ""
@@ -69,6 +73,7 @@ class DraftDataCache(SQLModel, table=True):
 
 class NflPlayersCache(SQLModel, table=True):
     __tablename__ = "nfl_players_cache"
+    __table_args__ = {"extend_existing": True}
 
     id: int = Field(default=1, primary_key=True)  # singleton
     payload_json: str = ""
@@ -108,14 +113,17 @@ class _PlayerValueRow(SQLModel):
 
 class FantasyCalcValue(_PlayerValueRow, table=True):
     __tablename__ = "fantasycalc_value"
+    __table_args__ = {"extend_existing": True}
 
 
 class KeepTradeCutValue(_PlayerValueRow, table=True):
     __tablename__ = "keeptradecut_value"
+    __table_args__ = {"extend_existing": True}
 
 
 class DraftSharksValue(_PlayerValueRow, table=True):
     __tablename__ = "draftsharks_value"
+    __table_args__ = {"extend_existing": True}
 
 
 # source name (NormalizedPlayerValue.source) -> table class
@@ -128,6 +136,7 @@ SOURCE_TABLES: dict[str, type[_PlayerValueRow]] = {
 
 class FantasyCalcTradeHistory(SQLModel, table=True):
     __tablename__ = "fantasycalc_trade_history"
+    __table_args__ = {"extend_existing": True}
 
     key: str = Field(primary_key=True)  # "<fc_player_id>/<format_key>"
     points_json: str = "[]"  # [[iso_date, value], ...]
@@ -143,6 +152,7 @@ class SourceFetch(SQLModel, table=True):
     """
 
     __tablename__ = "source_fetch"
+    __table_args__ = {"extend_existing": True}
 
     key: str = Field(primary_key=True)  # "<source>/<format_key>"
     source: str = ""
@@ -159,6 +169,7 @@ class SourceFetch(SQLModel, table=True):
 
 class UserPreferences(SQLModel, table=True):
     __tablename__ = "user_preferences"
+    __table_args__ = {"extend_existing": True}
 
     username: str = Field(primary_key=True)
     # Value-model weights
@@ -167,6 +178,7 @@ class UserPreferences(SQLModel, table=True):
     trend_weight: float = 0.0
     injury_weight: float = 0.0
     adp_divergence_weight: float = 0.0
+    production_weight: float = 0.0
     # League-format overrides
     override_enabled: bool = False
     num_qbs: Optional[int] = None
@@ -185,8 +197,26 @@ class UserPreferences(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utcnow)
 
 
+class StatCache(SQLModel, table=True):
+    """Generic JSON cache for performance/stat payloads keyed by ``kind/season``.
+
+    Backs the nflverse + SportsDataIO fetchers (realized stats, weekly stats,
+    projections, reconciled performance) under cache-until-manual-refresh.
+    Payloads are lists of dicts (raw API rows or ``model_dump()``ed models).
+    """
+
+    __tablename__ = "stat_cache"
+    __table_args__ = {"extend_existing": True}
+
+    key: str = Field(primary_key=True)  # "<kind>/<season>"
+    kind: str = Field(index=True, default="")
+    payload_json: str = "[]"
+    fetched_at: datetime = Field(default_factory=utcnow)
+
+
 class ValueSnapshot(SQLModel, table=True):
     __tablename__ = "value_snapshot"
+    __table_args__ = {"extend_existing": True}
 
     snapshot_date: str = Field(primary_key=True)  # ISO date
     player_key: str = Field(primary_key=True)

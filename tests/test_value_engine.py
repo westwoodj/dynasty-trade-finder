@@ -322,3 +322,46 @@ class TestOutputMaps:
         assert w1.cache_key() == ValueWeights().cache_key()
         assert w1.cache_key() != w2.cache_key()
         assert hash(w1)  # frozen → hashable
+
+    def test_production_weight_in_cache_key(self) -> None:
+        assert ValueWeights().cache_key() != ValueWeights(
+            production_weight=0.5
+        ).cache_key()
+
+
+# ---------------------------------------------------------------------------
+# Recent-production adjustment
+# ---------------------------------------------------------------------------
+
+
+class TestProductionSignal:
+    def _rows(self):
+        return {
+            "fantasycalc": [
+                npv("Top", "fantasycalc", 100.0, sleeper_id="1"),
+                npv("Bottom", "fantasycalc", 100.0, sleeper_id="2"),
+            ]
+        }
+
+    def test_no_weight_leaves_values_equal(self) -> None:
+        prod = {"1": 1.0, "2": -1.0}
+        v = ValueEngine(ValueWeights(production_weight=0.0), production=prod).blend(
+            self._rows()
+        )
+        assert v["1"].adjusted_value == pytest.approx(v["2"].adjusted_value)
+
+    def test_full_weight_swings_by_max(self) -> None:
+        prod = {"1": 1.0, "2": -1.0}
+        v = ValueEngine(ValueWeights(production_weight=1.0), production=prod).blend(
+            self._rows()
+        )
+        # PRODUCTION_MAX = 0.25 → +25% / -25% at full weight.
+        assert v["1"].adjusted_value == pytest.approx(125.0)
+        assert v["2"].adjusted_value == pytest.approx(75.0)
+        assert v["1"].components["production"] == pytest.approx(0.25)
+
+    def test_missing_player_gets_no_signal(self) -> None:
+        v = ValueEngine(ValueWeights(production_weight=1.0), production={}).blend(
+            self._rows()
+        )
+        assert v["1"].components["production"] == pytest.approx(0.0)

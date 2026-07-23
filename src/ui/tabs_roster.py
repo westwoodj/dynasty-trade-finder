@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Callable, Optional
 
 import pandas as pd
 import streamlit as st
 
 from ..trade_calculator import TradeAsset
 from ..value_engine import PlayerValuation
-from .components import POSITIONS, format_components
+from .components import (
+    POSITIONS,
+    PlayerRef,
+    format_components,
+    select_player_from_table,
+)
 
 
 def render_my_roster(
@@ -17,6 +22,7 @@ def render_my_roster(
     my_picks: list[TradeAsset],
     headcount_need: dict[str, int],
     vor_need: Optional[dict[str, float]] = None,
+    on_select_player: Optional[Callable[[PlayerRef], None]] = None,
 ) -> None:
     st.header("📋 My Roster")
 
@@ -28,6 +34,7 @@ def render_my_roster(
 
     with col1:
         rows = []
+        row_keys: list[PlayerRef] = []
         for asset, valuation in sorted(pairs, key=lambda p: p[0].value, reverse=True):
             rows.append(
                 {
@@ -40,7 +47,19 @@ def render_my_roster(
                     "Adjustments": format_components(valuation),
                 }
             )
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            row_keys.append(
+                PlayerRef(
+                    name=asset.name,
+                    position=asset.position,
+                    sleeper_id=valuation.sleeper_id if valuation else None,
+                )
+            )
+        st.caption("💡 Click a player's row for full detail.")
+        ref = select_player_from_table(
+            pd.DataFrame(rows), row_keys, key="roster_table"
+        )
+        if ref and on_select_player:
+            on_select_player(ref)
 
         if my_picks:
             st.subheader("Draft picks")

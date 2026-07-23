@@ -11,7 +11,7 @@ import json
 from datetime import date, datetime, timedelta
 from typing import Callable, Optional
 
-from sqlalchemy import Engine, delete, func
+from sqlalchemy import Engine, delete, func, inspect, text
 from sqlmodel import Session, select
 
 from ..data_providers import NormalizedPlayerValue
@@ -29,12 +29,56 @@ def _row_to_npv(row: m._PlayerValueRow) -> NormalizedPlayerValue:
     return NormalizedPlayerValue(**{f: getattr(row, f) for f in _NPV_FIELDS})
 
 
+def _scalar_default(col) -> Optional[str]:
+    """SQL literal for a column's scalar Python default, or None.
+
+    Used by the additive column migration; factory/callable defaults (e.g.
+    ``utcnow``) return None so the added column is simply nullable.
+    """
+    default = col.default
+    if default is None or not getattr(default, "is_scalar", False):
+        return None
+    value = default.arg
+    if isinstance(value, bool):
+        return str(int(value))
+    if isinstance(value, (int, float)):
+        return repr(value)
+    return "'" + str(value).replace("'", "''") + "'"
+
+
 class DtfStore:
     """Durable cache + preferences + value-history store."""
 
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
         m.SQLModel.metadata.create_all(engine)
+        self._migrate_columns()
+
+    def _migrate_columns(self) -> None:
+        """Add model columns missing from existing tables.
+
+        ``create_all`` creates missing *tables* but never alters existing ones,
+        so a new field on an existing model (e.g. ``production_weight``) would
+        raise "no such column" against an older ``data/dtf.db``. This adds any
+        such columns in place (nullable, with the model's scalar default) —
+        additive and lossless. New columns must carry a scalar default.
+        """
+        inspector = inspect(self.engine)
+        existing = set(inspector.get_table_names())
+        with self.engine.begin() as conn:
+            for table in m.SQLModel.metadata.tables.values():
+                if table.name not in existing:
+                    continue
+                have = {c["name"] for c in inspector.get_columns(table.name)}
+                for col in table.columns:
+                    if col.name in have:
+                        continue
+                    type_sql = col.type.compile(dialect=self.engine.dialect)
+                    ddl = f'ADD COLUMN "{col.name}" {type_sql}'
+                    default = _scalar_default(col)
+                    if default is not None:
+                        ddl += f" DEFAULT {default}"
+                    conn.execute(text(f'ALTER TABLE "{table.name}" {ddl}'))
 
     def _session(self) -> Session:
         return Session(self.engine)
@@ -147,6 +191,39 @@ class DtfStore:
             s.merge(
                 m.NflPlayersCache(
                     id=1, payload_json=json.dumps(data), fetched_at=m.utcnow()
+                )
+            )
+            s.commit()
+        return data
+
+    # ------------------------------------------------------------------
+    # Performance / stat payloads (generic JSON cache keyed by kind/season)
+    # ------------------------------------------------------------------
+
+    def get_or_fetch_stat(
+        self,
+        kind: str,
+        season: int | str,
+        fetcher: Callable[[], list],
+        force: bool = False,
+    ) -> list:
+        """Return a cached list-of-dicts payload for *kind*/*season*.
+
+        The billed/slow *fetcher* runs only on a cache miss or ``force``.
+        """
+        key = f"{kind}/{season}"
+        with self._session() as s:
+            row = s.get(m.StatCache, key)
+            if row is not None and not force:
+                return json.loads(row.payload_json)
+        data = fetcher() or []
+        with self._session() as s:
+            s.merge(
+                m.StatCache(
+                    key=key,
+                    kind=kind,
+                    payload_json=json.dumps(data),
+                    fetched_at=m.utcnow(),
                 )
             )
             s.commit()
@@ -386,6 +463,10 @@ class DtfStore:
                     .order_by(m.SourceFetch.fetched_at.desc())
                 ).first()
             return row.fetched_at if row is not None else None
+        if kind == "stat":
+            with self._session() as s:
+                row = s.get(m.StatCache, key)
+            return row.fetched_at if row is not None else None
         return None
 
 
@@ -405,6 +486,7 @@ def weights_from_prefs(prefs: m.UserPreferences) -> ValueWeights:
         trend_weight=prefs.trend_weight,
         injury_weight=prefs.injury_weight,
         adp_divergence_weight=prefs.adp_divergence_weight,
+        production_weight=prefs.production_weight,
     )
 
 
@@ -414,3 +496,4 @@ def apply_weights_to_prefs(prefs: m.UserPreferences, weights: ValueWeights) -> N
     prefs.trend_weight = weights.trend_weight
     prefs.injury_weight = weights.injury_weight
     prefs.adp_divergence_weight = weights.adp_divergence_weight
+    prefs.production_weight = weights.production_weight
